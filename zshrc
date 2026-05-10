@@ -23,6 +23,8 @@ export PATH="${HOME}/.bun/bin:$PATH"
 
 export PATH="${HOME}/Develop/google-cloud-sdk/bin:$PATH"
 
+export PATH="${HOME}/go/bin:$PATH"
+
 ### Alibaba cloud mirror for homebrew
 # export HOMEBREW_API_DOMAIN=https://mirrors.aliyun.com/homebrew-bottles/api
 # export HOMEBREW_BOTTLE_DOMAIN=https://mirrors.aliyun.com/homebrew-bottles
@@ -69,11 +71,11 @@ zinit lucid wait"0" for \
 zicompinit
 zinit cdreplay -q
 
-# Set up fzf key bindings (Ctrl-T/Ctrl-R/Alt-C) and fuzzy completion
-command -v fzf >/dev/null 2>&1 && source <(fzf --zsh)
-
 zinit lucid wait"1" for \
   zsh-users/zsh-syntax-highlighting
+
+# Set up fzf key bindings (Ctrl-T/Ctrl-R/Alt-C) and fuzzy completion
+command -v fzf >/dev/null 2>&1 && source <(fzf --zsh)
 
 # The next line updates PATH for the Google Cloud SDK.
 if [ -f "${HOME}/Develop/google-cloud-sdk/path.zsh.inc" ]; then . "${HOME}/Develop/google-cloud-sdk/path.zsh.inc"; fi
@@ -87,6 +89,10 @@ eval "$(uv generate-shell-completion zsh)"
 eval "$(uvx --generate-shell-completion zsh)"
 
 eval "$(/opt/homebrew/bin/brew shellenv)"
+
+# `brew shellenv` runs path_helper which front-loads /opt/homebrew/bin.
+# Re-prepend nix paths so nix profile beats homebrew on overlap (e.g. git, ffmpeg).
+export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
 
 compdef _gnu_generic zed
 
