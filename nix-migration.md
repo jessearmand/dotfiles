@@ -140,12 +140,63 @@ servers spawned as subprocesses). Audit with `grep -r "python_host_prog\|node_ho
 
 | Package | Why brew wins |
 |---------|---------------|
-| `colima` | Lima VM, deeply tied to macOS Virtualization.framework. Brew's formula has Apple-Silicon-specific patches. |
-| `docker`, `docker-buildx`, `docker-compose` | CLI clients usually configured to talk to brew's colima. Mixing client/daemon sources risks socket-path confusion. |
-| `cloudflared` | Daemon. Brew handles `brew services` integration with launchd. |
+| `colima` | The container **daemon**. `colima start` provisions a Lima VM (Apple Virtualization.framework) preloaded with a container engine, and forwards its socket to the host. Inherits Lima's deep coupling to macOS internals + Apple-Silicon brew patches. See "The client/daemon boundary" below. |
 | `lsusb` | Brew's `lsusb` is a custom shell wrapper around `system_profiler SPUSBDataType` — nixpkgs ships the Linux original which doesn't work on macOS the same way. |
 | `mactop` | Apple Silicon system monitor — uses `powermetrics` and macOS-specific perf counters. |
 | **All casks** (fonts, GUI apps) | Casks install to `/Applications`, `~/Library/Fonts`, etc. Nix has no cask story; nix-installed fonts on macOS need manual registration to be discoverable by GUI apps. |
+
+> **Reclassified out of Tier 3 (2026-06-04):** `docker` (+`docker-buildx`,
+> +`docker-compose`) and `cloudflared` were both originally parked here but
+> **migrated to nix** — see "The client/daemon boundary" and the Tier 4 verdicts.
+> The lesson: "daemon-adjacent" ≠ "is a daemon." Audit before assuming.
+
+### The client/daemon boundary (the cleanest cut line)
+
+The deciding question for daemon-adjacent tools isn't "does this touch a daemon?"
+but **"is this tool the daemon, or a client of it?"** The boundary is the
+socket/IPC channel:
+
+```
+docker CLI (nix)  →  unix socket  →  colima  →  lima  →  Virtualization.framework  →  Linux VM (dockerd)
+   client                            wrapper   VM mgr      macOS kernel
+   ── host side, portable ──         ───────────── VM side, bound to macOS ─────────────
+```
+
+Everything **host-side** of the socket (the `docker` CLI and its `buildx`/`compose`
+plugins) is just binaries reading config and writing to a socket — portable across
+package managers. Everything **VM-side** (colima → lima → VZ.framework) is bound to
+macOS internals and stays on brew. Migrate the client, keep the daemon.
+
+- **Lima vs colima:** Lima ("Linux machines") is the general VM manager — boots a
+  Linux guest via Virtualization.framework, handles mounts/port-forwarding/DNS;
+  not container-specific. **Colima** ("Containers on Lima") is a thin wrapper that
+  provisions a Lima VM preloaded with Docker/containerd, forwards the container
+  socket (`~/.colima/default/docker.sock`), and wires the docker `context`. Colima
+  literally creates a Lima instance named `colima` (`limactl list` shows it).
+- **The one real gotcha — plugin discovery.** `buildx` and `compose` are docker CLI
+  *plugins*, found by directory scan. A nix docker won't scan brew's
+  `/opt/homebrew/lib/docker/cli-plugins`, so migrating `docker` alone silently
+  breaks `docker buildx`/`docker compose`. Fix source-independently by seeding the
+  one dir docker *always* scans:
+  ```sh
+  mkdir -p ~/.docker/cli-plugins
+  ln -sfn ~/.nix-profile/libexec/docker/cli-plugins/docker-buildx  ~/.docker/cli-plugins/docker-buildx
+  ln -sfn ~/.nix-profile/libexec/docker/cli-plugins/docker-compose ~/.docker/cli-plugins/docker-compose
+  ```
+  Pointing at the **profile** path (not the raw store path) keeps the symlink valid
+  across nix upgrades.
+- **Verify the daemon is reachable before celebrating.** `colima start`, then
+  `docker version` should show both Client and Server; `docker buildx ls` should
+  list the colima builder; `docker run --rm hello-world` is the end-to-end proof.
+  Client newer than server (e.g. client 29.5 / server 27.4) is fine — docker
+  clients are backward-compatible; `colima delete && colima start` re-provisions a
+  newer engine if you want them aligned.
+- **`cloudflared` was never actually a daemon here.** The Tier-3 "keep for
+  `brew services`/launchd" rationale only applies if you *run* it as a managed
+  service. Check first: `brew services list | rg cloudflared`, `launchctl list |
+  rg cloudflared`, `ls ~/.cloudflared`. All empty → it's a dormant CLI binary →
+  migrate freely. (If you later want a persistent tunnel, nix won't write the
+  launchd plist for you; run it manually or author a LaunchAgent.)
 
 ### Tier 4 — Investigate before deciding
 
@@ -178,7 +229,10 @@ every Tier 4 candidate *before* batching, or install risky ones one at a time.
 |---------|---------|
 | `mole` | **`meta.broken = true`** in nixpkgs — `nix eval .version` returns `2.0.0`, but `nix profile install` refuses with "Refusing to evaluate package 'mole-2.0.0' … because it has problems: broken". **Kept on brew.** The canonical "exists but unbuildable" case. |
 | `mint` | `meta.broken = false` — installs cleanly (Mint 0.28.1). The Swift-toolchain pessimism above didn't bite for mint *itself*; whether it can *build* Swift packages on nix-darwin is a separate, untested question. **Migrated to nix.** |
-| `perl` | `brew uses --installed perl` empty → nothing depended on it. **Migrated to nix** (5.42.0); nix perl wins on PATH so any bare `perl` call still resolves. |
+| `docker` (+`docker-buildx`, +`docker-compose`) | All `meta.broken = false`, no brew reverse-deps. **Migrated to nix** as a set (29.5.2 / buildx 0.31.1 / compose 5.1.4), verified end-to-end against a live colima daemon (`hello-world` ran). Plugins seeded into `~/.docker/cli-plugins`. **colima stays on brew.** See "The client/daemon boundary." |
+| `cloudflared` | `meta.broken = false`, not registered with `brew services`/launchd, no `~/.cloudflared`. Was a dormant CLI, not a running daemon → **migrated to nix** (2026.5.0). |
+| `cmake` | `meta.broken = false`, no brew reverse-deps (a user-requested leaf). Its real dependents are *source builds* invisible to `brew uses`, so the safety check is functional, not graph-based. **Migrated to nix** (4.1.2, up from brew's 3.30.2) after a configure+build+run smoke test confirmed it detects AppleClang + the macOS SDK. Caveat: empty `CMAKE_OSX_SYSROOT` is fine — cmake defers to AppleClang's default SDK; a compiling `#include <stdio.h>` is the real proof. |
+| `perl` | `brew uses --installed perl` empty → nothing depended on it. **Migrated to nix** (5.42.0); nix perl wins on PATH so any bare `perl` call still resolves. Uninstalling brew perl autoremoved its orphaned deps `berkeley-db@5` + `gdbm` for free. |
 | `pipx` | **Dropped** (uv/uvx covers it). |
 | `icu4c@77`, `icu4c@78` | Orphans (`brew uses --installed` empty) → **dropped**. Gotcha: a *new* versioned icu4c can get promoted to a leaf mid-teardown and survive `brew autoremove` (locally flagged install-on-request); remove it explicitly. |
 | `tmuxai` | No nix counterpart → **dropped**. Cascade-removed `tmux` as collateral (tmux was a tmuxai dep, not a leaf) — restore tmux via nix afterward. |
@@ -392,8 +446,16 @@ packages.
 **Second session (2026-06, this machine), fuller pass:** brew leaves 35 → 7
 (-80%), brew formulae 178 → 9 (-95%), nix profile 25 packages. ocrmypdf dropped
 (not stubbed); mole kept on brew (`meta.broken`); rust-analyzer moved to rustup;
-perl/mint/mole-attempt resolved per the Tier 4 verdicts above. Kept on brew:
-colima, docker(+buildx,+compose), lsusb, mactop, mole, and all casks.
+perl/mint/mole-attempt resolved per the Tier 4 verdicts above.
+
+**Third pass (2026-06-04, this machine):** migrated `mint`, the docker stack
+(`docker`+`docker-buildx`+`docker-compose`), `cloudflared`, `perl`, and `cmake`
+to nix — each verified (docker end-to-end against a live colima daemon; cmake via
+a configure+build+run smoke test). This is where the "client/daemon boundary"
+principle was nailed down: docker/cloudflared were Tier-3-by-association, not
+genuine daemons. **Brew leaves 14 → 7.** Now kept on brew: `colima` (the actual
+daemon), `lsusb`, `mactop`, `icu4c@77` (transitive), `git-xet`, `llama.cpp`,
+`mole` (`meta.broken`), and all casks.
 
 ## Open questions / future work
 
