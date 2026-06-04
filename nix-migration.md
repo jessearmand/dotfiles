@@ -66,6 +66,19 @@ brew's because of PATH precedence. The Determinate Nix installer adds nix to
 PATH via `/etc/zshrc` (which runs *before* `~/.zshrc`), and `brew shellenv`
 later overrides that.
 
+Two extra failure modes surface when the fix *looks* present but isn't effective:
+
+- **Stale / unsymlinked dotfiles.** If `~/.zshrc` is a hand-managed copy that has
+  drifted from your tracked repo (this repo is not symlinked — see `CLAUDE.md`),
+  the fix can be committed to the repo yet absent from the *running* file. Symptom
+  is identical (brew wins). Verify the LIVE file, not the repo:
+  `rg nix-profile ~/.zshrc`, then confirm with `zsh -lic 'command -v git'`.
+- **Hardcoded `/opt/homebrew` paths in configs.** `gh auth setup-git` writes
+  `helper = !/opt/homebrew/bin/gh auth git-credential` into `~/.gitconfig` with an
+  *absolute* brew path. Uninstalling brew `gh` then breaks GitHub HTTPS auth
+  silently. Rewrite to PATH-relative `!gh auth git-credential`. Before any brew
+  uninstall, audit: `rg -l /opt/homebrew ~/.gitconfig ~/.zshrc ~/.config 2>/dev/null`.
+
 ## Migration tier framework
 
 Decide per-package using these tiers. The key dimension is **how much the tool
@@ -145,6 +158,32 @@ servers spawned as subprocesses). Audit with `grep -r "python_host_prog\|node_ho
 | `perl` | If anything calls `/opt/homebrew/bin/perl` (build scripts, custom tools), removing breaks them silently. Audit before touching. |
 | `pipx` | Largely redundant if you have `uv` + `uvx` (which mise can manage). Often just `brew uninstall` rather than migrate. |
 
+**Verifying availability: "in nixpkgs" ≠ "buildable."** `nix search nixpkgs <name>`
+and `nix eval nixpkgs#<name>.version` only *evaluate metadata* — they succeed even
+when a package is flagged unbuildable. The real gate is:
+
+```sh
+nix eval nixpkgs#<name>.meta.broken    # true = refuses to build
+```
+
+`nix profile install` evaluates the derivation's `drvPath`, which trips the
+`broken` assertion and aborts. And because **`nix profile install` is atomic per
+invocation**, one broken package in a batch fails the *entire* batch — nothing
+installs, and the error names only the broken package. So check `meta.broken` for
+every Tier 4 candidate *before* batching, or install risky ones one at a time.
+
+### Tier 4 verdicts (2026-06 session)
+
+| Package | Verdict |
+|---------|---------|
+| `mole` | **`meta.broken = true`** in nixpkgs — `nix eval .version` returns `2.0.0`, but `nix profile install` refuses with "Refusing to evaluate package 'mole-2.0.0' … because it has problems: broken". **Kept on brew.** The canonical "exists but unbuildable" case. |
+| `mint` | `meta.broken = false` — installs cleanly (Mint 0.28.1). The Swift-toolchain pessimism above didn't bite for mint *itself*; whether it can *build* Swift packages on nix-darwin is a separate, untested question. **Migrated to nix.** |
+| `perl` | `brew uses --installed perl` empty → nothing depended on it. **Migrated to nix** (5.42.0); nix perl wins on PATH so any bare `perl` call still resolves. |
+| `pipx` | **Dropped** (uv/uvx covers it). |
+| `icu4c@77`, `icu4c@78` | Orphans (`brew uses --installed` empty) → **dropped**. Gotcha: a *new* versioned icu4c can get promoted to a leaf mid-teardown and survive `brew autoremove` (locally flagged install-on-request); remove it explicitly. |
+| `tmuxai` | No nix counterpart → **dropped**. Cascade-removed `tmux` as collateral (tmux was a tmuxai dep, not a leaf) — restore tmux via nix afterward. |
+| `rust-analyzer` | Moved to **rustup**, not nix or brew (`rustup component add rust-analyzer`, proxy at `~/.cargo/bin/rust-analyzer`). For toolchain-coupled tools, the language's own distribution is often the right third option. |
+
 ## Apple Silicon-specific gotchas
 
 ### W^X kills (SIGKILL during image/SIMD work)
@@ -205,6 +244,15 @@ brew autoremove --dry-run    # preview cascading orphans
 brew autoremove              # accept the cascade
 brew cleanup                 # sweep stale cellars from past upgrades
 ```
+
+**Leaves shift as you go — iterate.** Removing a package promotes its now-orphaned
+deps to leaves, and removing *those* can cascade further. Re-run `brew leaves`
+after each round. This session: `ffmpeg` was a *dependency* at the start (not a
+leaf), got promoted to a leaf only after its dependents left, and uninstalling it
+then cascaded **103** codec formulae (x264, x265, aom, dav1d, rav1e, tesseract,
+openssl@3, glib …); a second `brew autoremove` pass caught still more. Don't
+assume one pass is terminal. Modern Homebrew (≥4.x) also auto-runs an autoremove
+at the end of each `brew uninstall`, so the cascade often happens inline.
 
 ### Override an attribute (skip flaky tests)
 
@@ -328,7 +376,7 @@ autoremove, you can have a stale 2.x cellar linked but no formula needing it.
 | `git` | Tier 1 | Brings macOS Keychain credential helper natively. `gitk` not bundled — use `gitFull` if needed. |
 | `ffmpeg` | Tier 2 | nix 8.0.1 with `libmp3lame`. Validated on WAV → MP3 (mono 24kHz). |
 | `ghostscript`, `qpdf` | Tier 2 | Standalone PDF tooling. |
-| `ocrmypdf` | Tier 2 | Custom build with stub unpaper (see "Stub a broken dep"). Base mode works, `--clean` fails fast. |
+| `ocrmypdf` | Tier 2 | Custom build with stub unpaper (see "Stub a broken dep"). Base mode works, `--clean` fails fast. **2026-06 follow-up: dropped entirely instead** — if you don't actually need OCR, dropping it avoids the stub build and cascade-frees ghostscript/qpdf/tesseract/unpaper (~900 MB). |
 | `ast-grep`, `coreutils`, `difftastic`, `gh`, `mkcert`, `p7zip`, `pkgconf`, `ripgrep`, `shellcheck`, `tree`, `wget` | Tier 1 | Single batch install. |
 | `neovim` | Tier 2 | 0.12.2 plain build. LazyVim's 43 plugins discovered cleanly, `:checkhealth` no errors. |
 | `lua-language-server`, `luarocks`, `stylua` | Tier 2 | Lua tooling for nvim. |
@@ -341,6 +389,12 @@ covers it), `tesseract-lang` (ocrmypdf bundles its own tesseract closure),
 Brew leaves: 33 → 14 (-58%). Brew formulae: 115 → 25 (-78%). Nix profile: 21
 packages.
 
+**Second session (2026-06, this machine), fuller pass:** brew leaves 35 → 7
+(-80%), brew formulae 178 → 9 (-95%), nix profile 25 packages. ocrmypdf dropped
+(not stubbed); mole kept on brew (`meta.broken`); rust-analyzer moved to rustup;
+perl/mint/mole-attempt resolved per the Tier 4 verdicts above. Kept on brew:
+colima, docker(+buildx,+compose), lsusb, mactop, mole, and all casks.
+
 ## Open questions / future work
 
 - `~/.config/nix/nix.conf` is not yet tracked in this dotfiles repo. The
@@ -348,8 +402,11 @@ packages.
   — it doesn't handle nested `~/.config/<app>/<file>` paths. Either extend the
   script to support nested mappings, or track this file via a different
   mechanism.
-- Tier 4 packages (`mole`, `mint`, `tmuxai`, `git-xet`, `icu4c@77`, `perl`)
-  not yet decided.
+- Tier 4 packages mostly decided in the 2026-06 session — see "Tier 4 verdicts"
+  above. Still open: `git-xet` (xet protocol; verify gitconfig hooks before
+  swapping). `mole` blocked upstream on `meta.broken` — recheck after a nixpkgs
+  bump or file/track the fix.
 - `llama.cpp` is the strongest Tier 2 candidate gated on validating Metal
   acceleration in the nix build.
-- `nix store optimise` not run yet; ~3.4 GB store size could be reduced.
+- `nix store optimise` — **done** (2026-06): 307.6 MiB freed by hard-linking
+  56,882 files. Re-run periodically after heavy installs.

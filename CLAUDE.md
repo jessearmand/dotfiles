@@ -45,6 +45,11 @@ touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 - **Search:** FZF (fuzzy finder), ripgrep
 - **Editor:** Neovim (all git operations use nvim)
 - **Version manager:** [mise](https://mise.jdx.dev/) (`~/.local/bin/mise`)
+- **Package source:** CLI tools come from a [Nix profile](nix-migration.md)
+  (`nix profile list`); Homebrew is reserved for macOS-specific / daemon tools
+  (colima, docker, lsusb, mactop) and casks. Requires `~/.config/nix/nix.conf`
+  with `experimental-features = nix-command flakes` — **not tracked here yet**
+  (the `link-dotfiles` script only maps `~/.<name>`, not nested `~/.config/*`).
 
 ## Git Aliases
 
