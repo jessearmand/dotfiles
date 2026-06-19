@@ -15,9 +15,13 @@ The push is brew's overlap with Nix isn't worth keeping for tools that are
 "just a binary" (Rust/Go/Haskell CLIs, plain C tools without macOS hooks).
 Migrating those reduces drift surface without losing anything.
 
-The brake is that aarch64-darwin in nixpkgs is a second-class citizen for
-anything touching macOS-specific surfaces (Metal, virtualization, codesigning
-entitlements, font registration). Some packages must stay on brew indefinitely.
+The brake is that aarch64-darwin in nixpkgs *can* be a second-class citizen for
+macOS-specific surfaces — but verify rather than assume. Some genuinely belong on
+brew (GUI casks, font registration, Metal builds that default off). Others *look*
+brew-only but aren't: nixpkgs handles Virtualization.framework **codesigning
+entitlements** for lima/colima just like brew does (see the colima correction
+below) — there the reason to stay on brew is operational (stateful VMs), not
+technical. Don't let "it touches macOS" become a reflexive "keep on brew."
 
 ## Prerequisites
 
@@ -42,6 +46,17 @@ consume **flake installables** (e.g. `nixpkgs#ripgrep`). The shorthand
 
 System-wide alternative is `/etc/nix/nix.conf` (needs sudo); on nix-darwin it
 goes in `configuration.nix` as `nix.settings.experimental-features = [ ... ]`.
+
+### Which "channel" are you on? (flakes have no channels)
+
+`nix-channel --list` is empty here — this is a flakes-only setup. The registry
+(`nix registry list`) resolves `flake:nixpkgs` → `github:NixOS/nixpkgs/nixpkgs-unstable`,
+so installs track the **rolling unstable** branch, *not* a numbered release
+(e.g. `26.05`). Key nuance: there's **no single pin for the whole profile** —
+each `nix profile install` re-locks `nixpkgs` to unstable's tip *at that moment*,
+so `nix profile list` shows different revisions per package. Realign everything
+onto one current revision with `nix profile upgrade --all`. To pin to a stable
+release instead, repoint the registry: `nix registry add nixpkgs github:NixOS/nixpkgs/nixos-26.05`.
 
 ## The PATH ordering trap (critical on macOS)
 
@@ -136,19 +151,61 @@ nix profile install --impure --expr 'let pkgs = (builtins.getFlake "nixpkgs").le
 Most LazyVim setups *don't need* providers (pure-Lua plugins, treesitter, LSP
 servers spawned as subprocesses). Audit with `grep -r "python_host_prog\|node_host_prog\|pynvim" ~/.config/nvim/`.
 
-### Tier 3 — Keep on brew (macOS-specific or daemon-managed)
+### Tier 3 — Keep on brew (macOS-specific only)
+
+After the colima/lima migration (below), Tier 3 is effectively **just casks** —
+no pure CLI tool on this machine genuinely requires brew anymore.
 
 | Package | Why brew wins |
 |---------|---------------|
-| `colima` | The container **daemon**. `colima start` provisions a Lima VM (Apple Virtualization.framework) preloaded with a container engine, and forwards its socket to the host. Inherits Lima's deep coupling to macOS internals + Apple-Silicon brew patches. See "The client/daemon boundary" below. |
-| `lsusb` | Brew's `lsusb` is a custom shell wrapper around `system_profiler SPUSBDataType` — nixpkgs ships the Linux original which doesn't work on macOS the same way. |
-| `mactop` | Apple Silicon system monitor — uses `powermetrics` and macOS-specific perf counters. |
-| **All casks** (fonts, GUI apps) | Casks install to `/Applications`, `~/Library/Fonts`, etc. Nix has no cask story; nix-installed fonts on macOS need manual registration to be discoverable by GUI apps. |
+| **All casks** (fonts, GUI apps — e.g. `wezterm@nightly`) | Casks install to `/Applications`, `~/Library/Fonts`, etc. Nix has no cask story; a nix GUI app lands in the store, unregistered with Spotlight/Launchpad/macOS app handling. Fonts need manual registration. |
+
+> **Correction (2026-06-19): "macOS virtualization is brew-specific" was false —
+> and now proven so with a live VM.** An earlier version of this guide claimed
+> colima/lima must stay on brew because they're "deeply tied to
+> Virtualization.framework with Apple-Silicon brew patches nix lacks." Wrong.
+> `nixpkgs#colima` (0.10.1) and `nixpkgs#lima`/`lima-full` (2.1.2) build for
+> `aarch64-darwin`, and nixpkgs attaches the **identical** `vz.entitlements`
+> (`com.apple.security.virtualization` + network client/server) via ad-hoc
+> codesign — the very thing the native `vz` driver needs — and sets `dontStrip`
+> on darwin so the entitlement survives. `com.apple.security.virtualization`
+> works with ad-hoc signing on Apple Silicon (no paid Developer cert). **We
+> migrated and verified it**: a fresh nix colima boots with `vmType: vz` (the
+> native driver), `docker run hello-world` passes, and `docker run --platform
+> linux/amd64 alpine uname -m` returns `x86_64` (cross-arch emulation intact). So
+> the VM side was never brew-bound; the only real cost is the stateful teardown.
+>
+> **lima vs lima-full:** same version, differing only by `withAdditionalGuestAgents`.
+> `lima` ships the **native-arch** guest agent only (same-arch VMs); `lima-full`
+> bundles guest agents for **all arches**, enabling cross-arch guests (amd64 Linux
+> on Apple Silicon via emulation). nix `colima` wraps **`lima-full` + `qemu`** onto
+> its *internal* PATH; install `nixpkgs#lima-full` separately too if you want
+> `limactl` on your shell PATH (colima alone doesn't expose it).
+>
+> **Safe migration recipe (stateful — plan a teardown):**
+> ```sh
+> colima stop && colima delete -f          # no containers? nothing to lose
+> brew uninstall colima && brew autoremove  # sweeps lima
+> nix profile install nixpkgs#colima nixpkgs#lima-full
+> colima start                              # provisions a fresh vz VM
+> docker run --rm hello-world               # verify client(nix)↔server(nix VM)
+> ```
 
 > **Reclassified out of Tier 3 (2026-06-04):** `docker` (+`docker-buildx`,
-> +`docker-compose`) and `cloudflared` were both originally parked here but
-> **migrated to nix** — see "The client/daemon boundary" and the Tier 4 verdicts.
-> The lesson: "daemon-adjacent" ≠ "is a daemon." Audit before assuming.
+> +`docker-compose`), `cloudflared`, `mactop`, and `lsusb` were all originally
+> parked here but **migrated to nix** — see "The client/daemon boundary" and the
+> Tier 4 verdicts. Three lessons came out of this:
+> - **"daemon-adjacent" ≠ "is a daemon."** docker/cloudflared are clients, not
+>   the daemon (colima) they sit next to.
+> - **"shells out" ≠ "links in."** `mactop` *calls* the system
+>   `/usr/bin/powermetrics` at runtime rather than linking a macOS framework, so
+>   the Go binary itself is portable — only the external tool it invokes is
+>   macOS-specific (and that's on the system PATH regardless of packaging).
+> - **attribute ≠ binary, and same name ≠ same tool.** `lsusb` *looked* absent
+>   because `nixpkgs#lsusb` isn't an attribute — but `nixpkgs#usbutils` provides
+>   the `lsusb` binary and supports `aarch64-darwin`. Beware the inverse too:
+>   nix's usbutils `lsusb` (libusb) is a *different program* than brew's `lsusb`
+>   (a shell wrapper over `system_profiler`) that happens to share the name.
 
 ### The client/daemon boundary (the cleanest cut line)
 
@@ -159,13 +216,19 @@ socket/IPC channel:
 ```
 docker CLI (nix)  →  unix socket  →  colima  →  lima  →  Virtualization.framework  →  Linux VM (dockerd)
    client                            wrapper   VM mgr      macOS kernel
-   ── host side, portable ──         ───────────── VM side, bound to macOS ─────────────
+   ── host side, portable ──         ──── VM side: also nix now (vz verified) ────
 ```
 
 Everything **host-side** of the socket (the `docker` CLI and its `buildx`/`compose`
 plugins) is just binaries reading config and writing to a socket — portable across
-package managers. Everything **VM-side** (colima → lima → VZ.framework) is bound to
-macOS internals and stays on brew. Migrate the client, keep the daemon.
+package managers; migrate freely. The **VM side** (colima → lima → VZ.framework) is
+**also nix now**: nixpkgs ships colima/lima and signs the Virtualization.framework
+entitlement, so the native `vz` driver runs unchanged — we confirmed a live nix VM
+reporting "macOS Virtualization.Framework". It's not brew-bound; it's just
+**stateful**, so it migrates on a planned stop/delete/restart rather than a
+transparent binary swap. The clean rule: the client moves for free; the daemon
+moves too, but schedule the teardown — verify with `colima status` (look for
+"macOS Virtualization.Framework") and `ps aux | rg Virtualization.framework`.
 
 - **Lima vs colima:** Lima ("Linux machines") is the general VM manager — boots a
   Linux guest via Virtualization.framework, handles mounts/port-forwarding/DNS;
@@ -229,9 +292,12 @@ every Tier 4 candidate *before* batching, or install risky ones one at a time.
 |---------|---------|
 | `mole` | **`meta.broken = true`** in nixpkgs — `nix eval .version` returns `2.0.0`, but `nix profile install` refuses with "Refusing to evaluate package 'mole-2.0.0' … because it has problems: broken". **Kept on brew.** The canonical "exists but unbuildable" case. |
 | `mint` | `meta.broken = false` — installs cleanly (Mint 0.28.1). The Swift-toolchain pessimism above didn't bite for mint *itself*; whether it can *build* Swift packages on nix-darwin is a separate, untested question. **Migrated to nix.** |
-| `docker` (+`docker-buildx`, +`docker-compose`) | All `meta.broken = false`, no brew reverse-deps. **Migrated to nix** as a set (29.5.2 / buildx 0.31.1 / compose 5.1.4), verified end-to-end against a live colima daemon (`hello-world` ran). Plugins seeded into `~/.docker/cli-plugins`. **colima stays on brew.** See "The client/daemon boundary." |
+| `docker` (+`docker-buildx`, +`docker-compose`) | All `meta.broken = false`, no brew reverse-deps. **Migrated to nix** as a set (29.5.2 / buildx 0.31.1 / compose 5.1.4), verified end-to-end against a live colima daemon (`hello-world` ran). Plugins seeded into `~/.docker/cli-plugins`. (At the time, colima was still on brew; it was later migrated too — see the 2026-06-19 correction.) See "The client/daemon boundary." |
 | `cloudflared` | `meta.broken = false`, not registered with `brew services`/launchd, no `~/.cloudflared`. Was a dormant CLI, not a running daemon → **migrated to nix** (2026.5.0). |
 | `cmake` | `meta.broken = false`, no brew reverse-deps (a user-requested leaf). Its real dependents are *source builds* invisible to `brew uses`, so the safety check is functional, not graph-based. **Migrated to nix** (4.1.2, up from brew's 3.30.2) after a configure+build+run smoke test confirmed it detects AppleClang + the macOS SDK. Caveat: empty `CMAKE_OSX_SYSROOT` is fine — cmake defers to AppleClang's default SDK; a compiling `#include <stdio.h>` is the real proof. |
+| `git-xet` (+`git-lfs`) | Both `meta.broken = false`. `git-xet` was the brew leaf; `git-lfs` came in as its dep. **Migrated together** (git-xet 0.2.1, git-lfs 3.7.1). git-lfs's `filter.lfs.*` integration keeps working because git invokes `git-lfs` via PATH (nix-first), and the gitconfig had no `[xet]`/`/opt/homebrew` hardcoding. Removing brew git-xet did *not* orphan `openssl@3`/`ca-certificates` — `llama.cpp` still needs them. |
+| `mactop` | `meta.broken = false`. Reclassified out of Tier 3: it *shells out* to `/usr/bin/powermetrics`, doesn't link a framework, so the Go binary is portable. **Migrated to nix** (2.1.3, up from brew's 2.1.1) and **runs fine without `sudo`** (recent mactop reads SMC/`IOReport` directly; admin-group membership covers the rest). General caveat, *not* specific to mactop: if you ever run a nix CLI as root, `sudo` resets PATH to `secure_path` (`/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`), which **excludes `~/.nix-profile/bin`** — so `sudo <tool>` won't find it. Use `sudo "$(command -v <tool>)"`, alias it, or add the nix path to `secure_path` in sudoers. |
+| `lsusb` (via `usbutils`) | **The attribute is `usbutils`, not `lsusb`** — that mistake made it look absent. `nixpkgs#usbutils` (`meta.broken = false`, v019) lists `aarch64-darwin` and ships the `lsusb` binary. **Migrated** — but it's a *different tool*: nix's is the real libusb/IOKit `lsusb`, brew's was a shell wrapper over `system_profiler`. Smoke test was decisive: brew's wrapper exited 1 with **empty** output on this machine, while nix's enumerated real devices (`0bda:5411` hub, `0bda:8153` USB-ethernet). Caveat: vendor/product **names don't resolve** (bare hex IDs) because `usb.ids` isn't in the closure — point `usbutils` at `hwdata`'s `usb.ids` if you want labels. |
 | `perl` | `brew uses --installed perl` empty → nothing depended on it. **Migrated to nix** (5.42.0); nix perl wins on PATH so any bare `perl` call still resolves. Uninstalling brew perl autoremoved its orphaned deps `berkeley-db@5` + `gdbm` for free. |
 | `pipx` | **Dropped** (uv/uvx covers it). |
 | `icu4c@77`, `icu4c@78` | Orphans (`brew uses --installed` empty) → **dropped**. Gotcha: a *new* versioned icu4c can get promoted to a leaf mid-teardown and survive `brew autoremove` (locally flagged install-on-request); remove it explicitly. |
@@ -423,6 +489,17 @@ sometimes leaves the previous cellar around. After several upgrades and an
 autoremove, you can have a stale 2.x cellar linked but no formula needing it.
 `brew cleanup` catches most; `--force` is the manual sweep.
 
+**Phantom kegs `autoremove` can't see.** `brew list` enumerates *Cellar
+directories*, while `brew info --json=v2 --installed` lists *tracked* installs —
+when they disagree, you have untracked orphan kegs. Seen this session:
+`cryptography` (an *empty* Cellar dir) plus `python-cryptography` (a dangling
+symlink → `cryptography`, left by the 2024 homebrew rename `python-cryptography`
+→ `cryptography`). Both showed in `brew list`, depended on nothing
+(`brew uses --installed` empty), and `brew info` reported "Not installed" — but
+`brew autoremove` ignored them because they aren't in the tracked dependency
+graph. Diagnose with `ls -la /opt/homebrew/Cellar/<name>` (empty dir or symlink
+= phantom) and clear by hand: `rmdir` the empty dir, `rm` the dangling symlink.
+
 ## Reference: what was migrated in this session
 
 | Package | Reason | Notes |
@@ -453,9 +530,27 @@ perl/mint/mole-attempt resolved per the Tier 4 verdicts above.
 to nix — each verified (docker end-to-end against a live colima daemon; cmake via
 a configure+build+run smoke test). This is where the "client/daemon boundary"
 principle was nailed down: docker/cloudflared were Tier-3-by-association, not
-genuine daemons. **Brew leaves 14 → 7.** Now kept on brew: `colima` (the actual
-daemon), `lsusb`, `mactop`, `icu4c@77` (transitive), `git-xet`, `llama.cpp`,
-`mole` (`meta.broken`), and all casks.
+genuine daemons. **Brew leaves 14 → 8.**
+
+**Fourth pass (2026-06-04, same day):** migrated `git-xet` + its `git-lfs` dep,
+`mactop` (the "shells out ≠ links in" reclassification), and `lsusb` (via
+`usbutils` — the "attribute ≠ binary" fix) — plus swept the
+`cryptography`/`python-cryptography` phantom kegs. **Brew leaves 8 → 4.** Now kept
+on brew: `colima` + `lima` (the VM daemon stack), `icu4c@77` (transitive),
+`llama.cpp` (Tier 2 — Metal validation still pending), `mole` (`meta.broken`),
+and all casks (incl. `wezterm@nightly`).
+
+**Migration pass (2026-06-19):** **migrated `colima` + `lima-full` to nix** —
+disproving the earlier "macOS virtualization is brew-only" claim. Clean stateful
+teardown (no containers): `colima stop && colima delete -f`, uninstall brew
+colima (autoremove swept lima 2.0.3), `nix profile install nixpkgs#colima
+nixpkgs#lima-full`, `colima start`. Verified end-to-end: fresh VM boots with
+`vmType: vz` and `colima status` reports "macOS Virtualization.Framework"; docker
+client 29.5.2 (nix) ↔ server 29.2.1 (nix VM); `hello-world` ran; `--platform
+linux/amd64` returned `x86_64` (cross-arch emulation via lima-full+qemu). Also
+documented `lima` vs `lima-full` (native vs all-arch guest agents). **Brew leaves
+4 → 3** — `icu4c@77` (transitive), `llama.cpp` (Tier 2, Metal pending), `mole`
+(`meta.broken`, the only hard blocker). Tier 3 is now effectively just casks.
 
 ## Open questions / future work
 
