@@ -20,6 +20,7 @@ export DYLD_LIBRARY_PATH="${MATLAB_RUNTIME}/runtime/maci64:${MATLAB_RUNTIME}/sys
 export PATH="$PATH:${HOME}/.cache/lm-studio/bin"
 export PATH="${HOME}/.mint/bin:$PATH"
 export PATH="${HOME}/.bun/bin:$PATH"
+export PATH="$HOME/.grok/bin:$PATH"
 
 export PATH="${HOME}/Develop/google-cloud-sdk/bin:$PATH"
 
@@ -68,6 +69,10 @@ zinit lucid wait"0" for \
   alexiszamanidis/zsh-git-fzf \
   laggardkernel/git-ignore
 
+# Grok CLI tab completions (regenerate after upgrade:
+#   grok completions zsh > ~/.grok/completions/zsh/_grok)
+[[ -d "$HOME/.grok/completions/zsh" ]] && fpath=("$HOME/.grok/completions/zsh" $fpath)
+
 zicompinit
 zinit cdreplay -q
 
@@ -101,4 +106,3 @@ compdef _gnu_generic zed
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
-
