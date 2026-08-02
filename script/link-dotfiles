@@ -6,6 +6,8 @@ usage() {
 Usage: script/link-dotfiles [--dry-run] [--force]
 
 Creates symlinks from this repo into your $HOME, prefixing filenames with ".".
+Files under config/ map to ~/.config/ with the same relative path
+(e.g. config/nix/nix.conf -> ~/.config/nix/nix.conf).
 
 Examples:
   script/link-dotfiles --dry-run
@@ -23,6 +25,7 @@ fi
 
 for arg in "$@"; do
   case "$arg" in
+    --dry-run) DRY_RUN=1; FORCE=0 ;;
     --force) FORCE=1; DRY_RUN=0 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -33,7 +36,7 @@ for arg in "$@"; do
   esac
 done
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 
 run() {
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -54,10 +57,9 @@ ensure_private_gitconfig() {
   fi
 }
 
-link_one() {
-  name="$1"
-  src="$repo_root/$name"
-  dest="$HOME/.$name"
+link_path() {
+  src="$1"
+  dest="$2"
 
   if [ ! -e "$src" ]; then
     echo "Missing source: $src" >&2
@@ -81,7 +83,20 @@ link_one() {
     run mv "$dest" "$dest.bak.$ts"
   fi
 
+  dest_dir=$(dirname -- "$dest")
+  if [ ! -d "$dest_dir" ]; then
+    run mkdir -p "$dest_dir"
+  fi
+
   run ln -s "$src" "$dest"
+}
+
+link_one() {
+  link_path "$repo_root/$1" "$HOME/.$1"
+}
+
+link_config_one() {
+  link_path "$repo_root/config/$1" "$HOME/.config/$1"
 }
 
 ensure_private_gitconfig
@@ -97,4 +112,11 @@ for f in \
   ripgreprc
 do
   link_one "$f"
+done
+
+# shellcheck disable=SC2043  # single entry for now; list grows as configs are tracked
+for f in \
+  nix/nix.conf
+do
+  link_config_one "$f"
 done

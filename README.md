@@ -15,6 +15,10 @@ Examples:
 - `gitconfig` -> `~/.gitconfig`
 - `p10k.zsh` -> `~/.p10k.zsh`
 
+Files under `config/` map to `~/.config/` with the same relative path:
+
+- `config/nix/nix.conf` -> `~/.config/nix/nix.conf`
+
 Managed files
 -------------
 
@@ -26,6 +30,7 @@ Managed files
 - `gitignore`
 - `gitmessage`
 - `ripgreprc`
+- `config/nix/nix.conf`
 
 Ignored / managed elsewhere
 --------------------------

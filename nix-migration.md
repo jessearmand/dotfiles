@@ -554,11 +554,9 @@ documented `lima` vs `lima-full` (native vs all-arch guest agents). **Brew leave
 
 ## Open questions / future work
 
-- `~/.config/nix/nix.conf` is not yet tracked in this dotfiles repo. The
-  `script/link-dotfiles` helper currently maps repo files to `~/.<name>` only
-  — it doesn't handle nested `~/.config/<app>/<file>` paths. Either extend the
-  script to support nested mappings, or track this file via a different
-  mechanism.
+- `~/.config/nix/nix.conf` — **done** (2026-08-02): tracked as
+  `config/nix/nix.conf`; `script/link-dotfiles` now maps `config/<path>` →
+  `~/.config/<path>` (creating parent directories as needed).
 - Tier 4 packages mostly decided in the 2026-06 session — see "Tier 4 verdicts"
   above. Still open: `git-xet` (xet protocol; verify gitconfig hooks before
   swapping). `mole` blocked upstream on `meta.broken` — recheck after a nixpkgs

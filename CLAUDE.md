@@ -12,6 +12,9 @@ Files are stored **without** a leading dot and map to `$HOME` by prefixing with 
 - `zshrc` → `~/.zshrc`
 - `gitconfig` → `~/.gitconfig`
 
+Files under `config/` map to `~/.config/` with the same relative path:
+- `config/nix/nix.conf` → `~/.config/nix/nix.conf`
+
 ## Setup
 
 **Symlink dotfiles (optional):**
@@ -37,6 +40,7 @@ touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 | `gitignore` | Global git ignore patterns |
 | `gitmessage` | Git commit message template |
 | `ripgreprc` | Ripgrep config: hidden files, smart case, line limits |
+| `config/nix/nix.conf` | Nix experimental features (nix-command, flakes) |
 
 ## Key Tools & Dependencies
 
@@ -48,8 +52,8 @@ touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 - **Package source:** CLI tools come from a [Nix profile](nix-migration.md)
   (`nix profile list`); Homebrew is reserved for macOS-specific / daemon tools
   (colima, docker, lsusb, mactop) and casks. Requires `~/.config/nix/nix.conf`
-  with `experimental-features = nix-command flakes` — **not tracked here yet**
-  (the `link-dotfiles` script only maps `~/.<name>`, not nested `~/.config/*`).
+  with `experimental-features = nix-command flakes` — tracked here as
+  `config/nix/nix.conf` and linked by `link-dotfiles`.
 
 ## Git Aliases
 
