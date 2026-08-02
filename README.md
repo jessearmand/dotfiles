@@ -57,6 +57,30 @@ Example contents:
       email = you@example.com
       signingkey = YOUR_KEY_ID
 
+PATH ordering in zshrc
+----------------------
+
+`zshrc` has two PATH zones, split by `eval "$(brew shellenv)"`:
+
+- `brew shellenv` runs macOS `path_helper`, which **rebuilds** PATH: it
+  front-loads `/etc/paths` + `/etc/paths.d/*` (including
+  `/opt/homebrew/bin`), then re-appends previously-set entries behind them.
+  Every prepend *before* that line (mint, bun, grok, go, gcloud, cargo)
+  therefore ends up **below** homebrew — harmless for uniquely-named
+  binaries, but useless for overriding anything.
+- Entries that must outrank homebrew live in the marked block *after*
+  `brew shellenv`, where later prepends win. Final precedence:
+
+      ~/.local/bin > pnpm > deno > nix profile > homebrew > system
+
+`~/.local/bin` appears twice on purpose: the early prepend is load-bearing
+(`mise activate` and the `uv`/`uvx` completion evals need those binaries
+during startup); the late one restores its precedence after `path_helper`
+demotes it.
+
+When an installer appends a PATH line to `~/.zshrc`, move it into the
+marked block — its position decides whether it can override brew/nix at all.
+
 Linking (optional)
 -----------------
 

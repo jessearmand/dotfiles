@@ -1,3 +1,5 @@
+# Add deno completions to search path
+if [[ ":$FPATH:" != *":/Users/jessearmand/.zsh/completions:"* ]]; then export FPATH="/Users/jessearmand/.zsh/completions:$FPATH"; fi
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
@@ -95,9 +97,32 @@ eval "$(uvx --generate-shell-completion zsh)"
 
 eval "$(/opt/homebrew/bin/brew shellenv)"
 
-# `brew shellenv` runs path_helper which front-loads /opt/homebrew/bin.
-# Re-prepend nix paths so nix profile beats homebrew on overlap (e.g. git, ffmpeg).
+### PATH precedence — everything below MUST stay after `brew shellenv`.
+# path_helper (run by `brew shellenv`) rebuilds PATH with /etc/paths +
+# /etc/paths.d (including /opt/homebrew/bin) up front, demoting every prepend
+# earlier in this file. Entries that must outrank homebrew are (re-)prepended
+# here; later prepends win. Final precedence:
+#   ~/.local/bin > pnpm > deno > nix profile > homebrew > system
+# See README "PATH ordering in zshrc" for the full reasoning.
+
+# Nix profile beats homebrew on overlap (e.g. git, ffmpeg).
 export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
+
+# deno (the env file guards against duplicate prepends)
+. "$HOME/.deno/env"
+
+# pnpm
+export PNPM_HOME="${HOME}/Library/pnpm"
+case ":$PATH:" in
+  *":$PNPM_HOME/bin:"*) ;;
+  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
+esac
+# pnpm end
+
+# Re-prepend ~/.local/bin (Antigravity CLI installer). The early prepend near
+# the top of this file stays load-bearing — mise activate and the uv/uvx
+# completion evals need it during startup — this one restores its precedence.
+export PATH="${HOME}/.local/bin:$PATH"
 
 compdef _gnu_generic zed
 
