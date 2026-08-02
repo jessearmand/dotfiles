@@ -291,13 +291,34 @@ every Tier 4 candidate *before* batching, or install risky ones one at a time.
 | Package | Verdict |
 |---------|---------|
 | `mole` | **`meta.broken = true`** in nixpkgs — `nix eval .version` returns `2.0.0`, but `nix profile install` refuses with "Refusing to evaluate package 'mole-2.0.0' … because it has problems: broken". **Kept on brew.** The canonical "exists but unbuildable" case. |
-| `mint` | `meta.broken = false` — installs cleanly (Mint 0.28.1). The Swift-toolchain pessimism above didn't bite for mint *itself*; whether it can *build* Swift packages on nix-darwin is a separate, untested question. **Migrated to nix.** |
+| `mint` | `meta.broken = false` — installs cleanly (Mint 0.28.1). The Swift-toolchain pessimism above didn't bite for mint *itself*; whether it can *build* Swift packages on nix-darwin is a separate, untested question. **Migrated to nix.** *(Later reverted — wrong package; see the correction below.)* |
 | `docker` (+`docker-buildx`, +`docker-compose`) | All `meta.broken = false`, no brew reverse-deps. **Migrated to nix** as a set (29.5.2 / buildx 0.31.1 / compose 5.1.4), verified end-to-end against a live colima daemon (`hello-world` ran). Plugins seeded into `~/.docker/cli-plugins`. (At the time, colima was still on brew; it was later migrated too — see the 2026-06-19 correction.) See "The client/daemon boundary." |
 | `cloudflared` | `meta.broken = false`, not registered with `brew services`/launchd, no `~/.cloudflared`. Was a dormant CLI, not a running daemon → **migrated to nix** (2026.5.0). |
 | `cmake` | `meta.broken = false`, no brew reverse-deps (a user-requested leaf). Its real dependents are *source builds* invisible to `brew uses`, so the safety check is functional, not graph-based. **Migrated to nix** (4.1.2, up from brew's 3.30.2) after a configure+build+run smoke test confirmed it detects AppleClang + the macOS SDK. Caveat: empty `CMAKE_OSX_SYSROOT` is fine — cmake defers to AppleClang's default SDK; a compiling `#include <stdio.h>` is the real proof. |
 | `git-xet` (+`git-lfs`) | Both `meta.broken = false`. `git-xet` was the brew leaf; `git-lfs` came in as its dep. **Migrated together** (git-xet 0.2.1, git-lfs 3.7.1). git-lfs's `filter.lfs.*` integration keeps working because git invokes `git-lfs` via PATH (nix-first), and the gitconfig had no `[xet]`/`/opt/homebrew` hardcoding. Removing brew git-xet did *not* orphan `openssl@3`/`ca-certificates` — `llama.cpp` still needs them. |
 | `mactop` | `meta.broken = false`. Reclassified out of Tier 3: it *shells out* to `/usr/bin/powermetrics`, doesn't link a framework, so the Go binary is portable. **Migrated to nix** (2.1.3, up from brew's 2.1.1) and **runs fine without `sudo`** (recent mactop reads SMC/`IOReport` directly; admin-group membership covers the rest). General caveat, *not* specific to mactop: if you ever run a nix CLI as root, `sudo` resets PATH to `secure_path` (`/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin`), which **excludes `~/.nix-profile/bin`** — so `sudo <tool>` won't find it. Use `sudo "$(command -v <tool>)"`, alias it, or add the nix path to `secure_path` in sudoers. |
 | `lsusb` (via `usbutils`) | **The attribute is `usbutils`, not `lsusb`** — that mistake made it look absent. `nixpkgs#usbutils` (`meta.broken = false`, v019) lists `aarch64-darwin` and ships the `lsusb` binary. **Migrated** — but it's a *different tool*: nix's is the real libusb/IOKit `lsusb`, brew's was a shell wrapper over `system_profiler`. Smoke test was decisive: brew's wrapper exited 1 with **empty** output on this machine, while nix's enumerated real devices (`0bda:5411` hub, `0bda:8153` USB-ethernet). Caveat: vendor/product **names don't resolve** (bare hex IDs) because `usb.ids` isn't in the closure — point `usbutils` at `hwdata`'s `usb.ids` if you want labels. |
+
+> **Correction (2026-08-02): `nixpkgs#mint` is the wrong package — a name
+> collision.** It is the [Mint programming language](https://www.mint-lang.com/)
+> (a Crystal-built web framework), **not**
+> [yonaskolb/Mint](https://github.com/yonaskolb/Mint), the Swift package
+> manager that was on brew. The version was the tell: nix installed 0.28.1
+> (mint-lang's versioning) while Swift Mint's latest is 0.18.x — and
+> "installs cleanly" proved nothing about being the right tool. Swift Mint is
+> not in nixpkgs at all. Fixed by removing it (`nix profile remove mint`) and
+> bootstrapping Swift Mint with itself using the system Swift toolchain:
+>
+> ```sh
+> git clone https://github.com/yonaskolb/Mint.git && cd Mint
+> swift run mint install yonaskolb/mint
+> # → Installed mint 0.18.0, linked into ~/.mint/bin (already on PATH in zshrc)
+> ```
+>
+> **Lesson:** an attribute name matching your brew formula is not identity.
+> Before migrating, verify the package is the same tool:
+> `nix eval nixpkgs#<name>.meta.description` and `.meta.homepage` — and treat
+> an unexpected version number as a red flag, not a bonus upgrade.
 | `perl` | `brew uses --installed perl` empty → nothing depended on it. **Migrated to nix** (5.42.0); nix perl wins on PATH so any bare `perl` call still resolves. Uninstalling brew perl autoremoved its orphaned deps `berkeley-db@5` + `gdbm` for free. |
 | `pipx` | **Dropped** (uv/uvx covers it). |
 | `icu4c@77`, `icu4c@78` | Orphans (`brew uses --installed` empty) → **dropped**. Gotcha: a *new* versioned icu4c can get promoted to a leaf mid-teardown and survive `brew autoremove` (locally flagged install-on-request); remove it explicitly. |
@@ -525,7 +546,8 @@ packages.
 (not stubbed); mole kept on brew (`meta.broken`); rust-analyzer moved to rustup;
 perl/mint/mole-attempt resolved per the Tier 4 verdicts above.
 
-**Third pass (2026-06-04, this machine):** migrated `mint`, the docker stack
+**Third pass (2026-06-04, this machine):** migrated `mint` (wrong package —
+reverted 2026-08-02, see the mint correction in the Tier 4 verdicts), the docker stack
 (`docker`+`docker-buildx`+`docker-compose`), `cloudflared`, `perl`, and `cmake`
 to nix — each verified (docker end-to-end against a live colima daemon; cmake via
 a configure+build+run smoke test). This is where the "client/daemon boundary"
