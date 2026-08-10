@@ -89,6 +89,18 @@ No symlinks are created automatically. If you want symlinks, use:
     ./script/link-dotfiles --dry-run
     ./script/link-dotfiles --force
 
+`--dry-run` (the default) walks every entry and reports what it would do,
+printing a diff for each destination whose contents differ from the repo copy.
+
+`--force` applies the plan, but only replaces a destination outright when it is
+byte-identical to the repo. Anything carrying local edits — git identity,
+credential helpers, host paths — is shown as a diff and confirmed one file at a
+time, so a blanket run cannot silently overwrite machine-specific config. Add
+`--yes` to answer those confirmations up front; with no terminal on stdin the
+differing files are skipped rather than replaced.
+
+Replaced files are moved aside as `<dest>.bak.<timestamp>` — nothing is deleted.
+
 Deprecated
 ----------
 

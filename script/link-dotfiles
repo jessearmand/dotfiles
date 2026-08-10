@@ -3,11 +3,25 @@ set -eu
 
 usage() {
   cat <<'EOF'
-Usage: script/link-dotfiles [--dry-run] [--force]
+Usage: script/link-dotfiles [--dry-run] [--force] [--yes]
 
 Creates symlinks from this repo into your $HOME, prefixing filenames with ".".
 Files under config/ map to ~/.config/ with the same relative path
 (e.g. config/nix/nix.conf -> ~/.config/nix/nix.conf).
+
+Modes:
+  --dry-run  (default) report what every entry would do, without touching
+             anything. Prints a diff for each destination whose contents
+             differ from the repo copy.
+  --force    apply the plan. A destination that is byte-identical to the repo
+             is linked without asking; one that differs is shown as a diff and
+             confirmed individually, so machine-specific edits are never lost
+             to a blanket run.
+  --yes      answer yes to those confirmations (unattended overwrite).
+
+Replaced files are moved aside as <dest>.bak.<timestamp>; nothing is deleted.
+With no terminal on stdin, differing destinations are skipped instead of
+overwritten -- run it from a shell to review them.
 
 Examples:
   script/link-dotfiles --dry-run
@@ -16,18 +30,17 @@ EOF
 }
 
 DRY_RUN=1
-FORCE=0
-
-if [ $# -eq 0 ]; then
-  # No arguments: default to dry-run (already set)
-  :
-fi
+ASSUME_YES=0
 
 for arg in "$@"; do
   case "$arg" in
-    --dry-run) DRY_RUN=1; FORCE=0 ;;
-    --force) FORCE=1; DRY_RUN=0 ;;
-    -h|--help) usage; exit 0 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --force) DRY_RUN=0 ;;
+    -y | --yes) ASSUME_YES=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
     *)
       echo "Unknown argument: $arg" >&2
       usage >&2
@@ -37,13 +50,56 @@ for arg in "$@"; do
 done
 
 repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+stamp=$(date +%Y%m%d%H%M%S)
+
+n_ok=0
+n_link=0
+n_skip=0
+n_missing=0
 
 run() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    printf '[dry-run] %s\n' "$*"
+    printf '    [dry-run] %s\n' "$*"
   else
     "$@"
   fi
+}
+
+show_diff() {
+  dest="$1"
+  src="$2"
+  printf '    ---- %s (yours) vs repo ----\n' "$dest"
+  diff -u "$dest" "$src" | sed 's/^/    /' || true
+  printf '    ---- end diff ----\n'
+}
+
+confirm() {
+  if [ "$ASSUME_YES" -eq 1 ]; then
+    return 0
+  fi
+  printf '    replace %s? [y/N] ' "$1"
+  reply=''
+  read -r reply || return 1
+  case "$reply" in
+    [yY] | [yY][eE][sS]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+apply_link() {
+  src="$1"
+  dest="$2"
+
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    run mv "$dest" "$dest.bak.$stamp"
+  fi
+
+  dest_dir=$(dirname -- "$dest")
+  if [ ! -d "$dest_dir" ]; then
+    run mkdir -p "$dest_dir"
+  fi
+
+  run ln -s "$src" "$dest"
 }
 
 ensure_private_gitconfig() {
@@ -62,33 +118,60 @@ link_path() {
   dest="$2"
 
   if [ ! -e "$src" ]; then
-    echo "Missing source: $src" >&2
-    exit 1
+    printf 'MISSING  %s is not in the repo\n' "$src" >&2
+    n_missing=$((n_missing + 1))
+    return 0
   fi
 
+  if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then
+    printf 'ok       %s -> %s\n' "$dest" "$src"
+    n_ok=$((n_ok + 1))
+    return 0
+  fi
+
+  if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+    printf 'link     %s (nothing there yet)\n' "$dest"
+    apply_link "$src" "$dest"
+    n_link=$((n_link + 1))
+    return 0
+  fi
+
+  if [ ! -L "$dest" ] && diff -q "$dest" "$src" >/dev/null 2>&1; then
+    printf 'link     %s (identical to the repo, nothing to lose)\n' "$dest"
+    apply_link "$src" "$dest"
+    n_link=$((n_link + 1))
+    return 0
+  fi
+
+  # Either a copy carrying local edits or a symlink to somewhere else. Those
+  # edits may be machine-specific (identity, credentials, host paths), so this
+  # is the one case that never gets replaced without the diff being seen.
   if [ -L "$dest" ]; then
-    current=$(readlink "$dest" || true)
-    if [ "$current" = "$src" ]; then
-      printf 'ok: %s -> %s\n' "$dest" "$src"
-      return 0
-    fi
+    printf 'REVIEW   %s -> %s (points somewhere else)\n' "$dest" "$(readlink "$dest")"
+  else
+    printf 'REVIEW   %s (local edits are not in the repo)\n' "$dest"
+  fi
+  show_diff "$dest" "$src"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '    --force would ask before replacing this one\n'
+    n_skip=$((n_skip + 1))
+    return 0
   fi
 
-  if [ -e "$dest" ] || [ -L "$dest" ]; then
-    if [ "$FORCE" -ne 1 ]; then
-      echo "Refusing to overwrite existing: $dest (use --force)" >&2
-      exit 1
-    fi
-    ts=$(date +%Y%m%d%H%M%S)
-    run mv "$dest" "$dest.bak.$ts"
+  if [ "$ASSUME_YES" -eq 0 ] && [ ! -t 0 ]; then
+    printf '    skipped: no terminal to confirm on (--yes overrides)\n'
+    n_skip=$((n_skip + 1))
+    return 0
   fi
 
-  dest_dir=$(dirname -- "$dest")
-  if [ ! -d "$dest_dir" ]; then
-    run mkdir -p "$dest_dir"
+  if confirm "$dest"; then
+    apply_link "$src" "$dest"
+    n_link=$((n_link + 1))
+  else
+    printf '    skipped: %s left as it is\n' "$dest"
+    n_skip=$((n_skip + 1))
   fi
-
-  run ln -s "$src" "$dest"
 }
 
 link_one() {
@@ -109,14 +192,26 @@ for f in \
   gitconfig \
   gitignore \
   gitmessage \
-  ripgreprc
-do
+  ripgreprc; do
   link_one "$f"
 done
 
 # shellcheck disable=SC2043  # single entry for now; list grows as configs are tracked
 for f in \
-  nix/nix.conf
-do
+  nix/nix.conf; do
   link_config_one "$f"
 done
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  printf '\nDry run: %d already linked, %d would be linked, %d need review.\n' \
+    "$n_ok" "$n_link" "$n_skip"
+  printf 'Re-run with --force to apply.\n'
+else
+  printf '\nDone: %d already linked, %d linked, %d left alone.\n' \
+    "$n_ok" "$n_link" "$n_skip"
+fi
+
+if [ "$n_missing" -gt 0 ]; then
+  printf '%d source file(s) missing from the repo.\n' "$n_missing" >&2
+  exit 1
+fi
