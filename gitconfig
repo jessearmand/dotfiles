@@ -30,10 +30,21 @@
 	cmd = nvim -f -c "Gdiff" "$MERGED"
 
 [diff]
-	tool = nvimdiff2
+	# difftastic is the default; `git difftool -t nvimdiff2` still opens nvim.
+	tool = difftastic
+[difftool]
+	# Run the difftool immediately, don't ask 'are you sure' each time.
+	prompt = false
 [difftool "nvimdiff2"]
 	trustExitCode = true
 	cmd = nvim -d $LOCAL $REMOTE
+[difftool "difftastic"]
+	# See `man git-difftool` for a description of MERGED, LOCAL and REMOTE.
+	cmd = difft "$MERGED" "$LOCAL" "abcdef1" "100644" "$REMOTE" "abcdef2" "100644"
+[pager]
+	# Use a pager if the difftool output is larger than one screenful,
+	# consistent with the behaviour of `git diff`.
+	difftool = true
 
 [gpg]
 	program = gpg2
@@ -47,11 +58,26 @@
 	lol = log --graph --decorate --pretty=oneline --abbrev-commit
 	lola = log --graph --decorate --pretty=oneline --abbrev-commit --all
 	ls = ls-files
+	# `git log` with patches shown with difftastic.
+	dl = -c diff.external=difft log -p --ext-diff
+	# Show the most recent commit with difftastic.
+	ds = -c diff.external=difft show --ext-diff
+	# `git diff` with difftastic.
+	dft = -c diff.external=difft diff
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 	required = true
 
+# Empty helper first to clear any earlier one, then hand auth to the gh CLI.
+[credential "https://github.com"]
+	helper =
+	helper = !gh auth git-credential
+[credential "https://gist.github.com"]
+	helper =
+	helper = !gh auth git-credential
+
+# Identity, signing key and other per-machine values. Last, so it wins.
 [include]
 	path = ~/.gitconfig.private

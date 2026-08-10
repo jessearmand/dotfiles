@@ -17,3 +17,5 @@ log/*.log
 rerun.txt
 tags
 tmp/**/*
+
+**/.claude/settings.local.json
