@@ -3,7 +3,10 @@ if [[ ":$FPATH:" != *":/Users/jessearmand/.zsh/completions:"* ]]; then export FP
 # Enable Powerlevel10k instant prompt. Should stay close to the top of ~/.zshrc.
 # Initialization code that may require console input (password prompts, [y/n]
 # confirmations, etc.) must go above this block; everything else may go below.
-if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+# Skip when job control is unavailable (interactive zsh without a tty, e.g.
+# `zsh -ic` from agent harnesses): instant prompt needs `setopt monitor`,
+# which fails there and takes gitstatus down with it.
+if [[ -o monitor && -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
   source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
@@ -56,9 +59,12 @@ zinit light-mode for \
 
 ### End of Zinit's installer chunk
 #
-# Load powerlevel10k theme
-zinit ice depth"1" # git clone depth
-zinit light romkatv/powerlevel10k
+# Load powerlevel10k theme (skipped without job control — no prompt to render,
+# and gitstatus/zle initialization would fail noisily).
+if [[ -o monitor ]]; then
+  zinit ice depth"1" # git clone depth
+  zinit light romkatv/powerlevel10k
+fi
 
 # Binary release in archive, from GitHub-releases page.
 # After automatic unpacking it provides program "fzf".
@@ -81,8 +87,10 @@ zinit cdreplay -q
 zinit lucid wait"1" for \
   zsh-users/zsh-syntax-highlighting
 
-# Set up fzf key bindings (Ctrl-T/Ctrl-R/Alt-C) and fuzzy completion
-command -v fzf >/dev/null 2>&1 && source <(fzf --zsh)
+# Set up fzf key bindings (Ctrl-T/Ctrl-R/Alt-C) and fuzzy completion.
+# Skipped without job control: bindings are useless without ZLE, and fzf's
+# option save/restore eval fails noisily on the unsettable `zle` option.
+command -v fzf >/dev/null 2>&1 && [[ -o monitor ]] && source <(fzf --zsh)
 
 # The next line updates PATH for the Google Cloud SDK.
 if [ -f "${HOME}/Develop/google-cloud-sdk/path.zsh.inc" ]; then . "${HOME}/Develop/google-cloud-sdk/path.zsh.inc"; fi
@@ -130,4 +138,7 @@ compdef _gnu_generic zed
 [ -s "/opt/homebrew/share/zsh/site-functions/_bun" ] && source "/opt/homebrew/share/zsh/site-functions/_bun"
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
-[[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+[[ ! -o monitor || ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
+
+# opencode
+export PATH=/Users/jessearmand/.opencode/bin:$PATH
