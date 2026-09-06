@@ -7,7 +7,8 @@ Usage: script/link-dotfiles [--dry-run] [--force] [--yes]
 
 Creates symlinks from this repo into your $HOME, prefixing filenames with ".".
 Files under config/ map to ~/.config/ with the same relative path
-(e.g. config/nix/nix.conf -> ~/.config/nix/nix.conf).
+(e.g. config/nix/nix.conf -> ~/.config/nix/nix.conf). On macOS, pnpm
+reads ~/Library/Preferences/pnpm/config.yaml rather than ~/.config/pnpm.
 
 Modes:
   --dry-run  (default) report what every entry would do, without touching
@@ -182,6 +183,15 @@ link_config_one() {
   link_path "$repo_root/config/$1" "$HOME/.config/$1"
 }
 
+# pnpm uses env-paths: macOS -> ~/Library/Preferences/pnpm, else ~/.config/pnpm.
+link_pnpm_one() {
+  case "$(uname -s)" in
+    Darwin) dest="$HOME/Library/Preferences/pnpm/config.yaml" ;;
+    *) dest="$HOME/.config/pnpm/config.yaml" ;;
+  esac
+  link_path "$repo_root/config/pnpm/config.yaml" "$dest"
+}
+
 ensure_private_gitconfig
 
 for f in \
@@ -192,15 +202,19 @@ for f in \
   gitconfig \
   gitignore \
   gitmessage \
-  ripgreprc; do
+  ripgreprc \
+  npmrc \
+  bunfig.toml; do
   link_one "$f"
 done
 
-# shellcheck disable=SC2043  # single entry for now; list grows as configs are tracked
 for f in \
-  nix/nix.conf; do
+  nix/nix.conf \
+  uv/uv.toml; do
   link_config_one "$f"
 done
+
+link_pnpm_one
 
 if [ "$DRY_RUN" -eq 1 ]; then
   printf '\nDry run: %d already linked, %d would be linked, %d need review.\n' \

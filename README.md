@@ -18,6 +18,8 @@ Examples:
 Files under `config/` map to `~/.config/` with the same relative path:
 
 - `config/nix/nix.conf` -> `~/.config/nix/nix.conf`
+- `config/uv/uv.toml` -> `~/.config/uv/uv.toml`
+- `config/pnpm/config.yaml` -> `~/Library/Preferences/pnpm/config.yaml` on macOS, `~/.config/pnpm/config.yaml` elsewhere
 
 Managed files
 -------------
@@ -31,6 +33,10 @@ Managed files
 - `gitmessage`
 - `ripgreprc`
 - `config/nix/nix.conf`
+- `npmrc`
+- `bunfig.toml`
+- `config/pnpm/config.yaml`
+- `config/uv/uv.toml`
 
 Ignored / managed elsewhere
 --------------------------

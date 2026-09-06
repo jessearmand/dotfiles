@@ -41,6 +41,10 @@ touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 | `gitmessage` | Git commit message template |
 | `ripgreprc` | Ripgrep config: hidden files, smart case, line limits |
 | `config/nix/nix.conf` | Nix experimental features (nix-command, flakes) |
+| `npmrc` | npm: skip versions published in the last 7 days |
+| `bunfig.toml` | bun: skip versions published in the last 7 days |
+| `config/pnpm/config.yaml` | pnpm: skip versions published in the last 7 days |
+| `config/uv/uv.toml` | uv: skip versions published in the last 7 days |
 
 ## Key Tools & Dependencies
 
