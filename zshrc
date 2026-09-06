@@ -142,3 +142,6 @@ compdef _gnu_generic zed
 
 # opencode
 export PATH=/Users/jessearmand/.opencode/bin:$PATH
+
+# kimi-code
+export PATH="/Users/jessearmand/.kimi-code/bin:$PATH"
