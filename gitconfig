@@ -78,6 +78,14 @@
 	helper =
 	helper = !gh auth git-credential
 
+# dgit on Cloudflare: push token comes from fnox (keychain), never stored by git.
+[credential "https://git.jessearmand.com"]
+	helper =
+	helper = fnox -c ~/Develop/fnox.toml GIT_TOKEN
+	username = x
+
 # Identity, signing key and other per-machine values. Last, so it wins.
 [include]
 	path = ~/.gitconfig.private
+[dgit]
+	host = git.jessearmand.com
