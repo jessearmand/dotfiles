@@ -14,8 +14,6 @@ export LANG=en_US.UTF-8
 
 export PATH="${HOME}/.local/bin:$PATH"
 
-eval "$(~/.local/bin/mise activate zsh)"
-
 test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
 
 export MATLAB_RUNTIME="/Applications/MATLAB/MATLAB_Runtime/v97"
@@ -145,3 +143,8 @@ export PATH=/Users/jessearmand/.opencode/bin:$PATH
 
 # kimi-code
 export PATH="/Users/jessearmand/.kimi-code/bin:$PATH"
+
+# mise must come last: its precmd hook rebuilds PATH from the snapshot taken
+# at activation, demoting every prepend after this line (e.g. nix bash below
+# /bin/bash). Invoked by absolute path so it doesn't rely on PATH.
+eval "$(~/.local/bin/mise activate zsh)"

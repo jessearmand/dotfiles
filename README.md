@@ -77,12 +77,17 @@ PATH ordering in zshrc
 - Entries that must outrank homebrew live in the marked block *after*
   `brew shellenv`, where later prepends win. Final precedence:
 
-      ~/.local/bin > pnpm > deno > nix profile > homebrew > system
+      mise tools > ~/.local/bin > pnpm > deno > nix profile > homebrew > system
 
 `~/.local/bin` appears twice on purpose: the early prepend is load-bearing
-(`mise activate` and the `uv`/`uvx` completion evals need those binaries
-during startup); the late one restores its precedence after `path_helper`
-demotes it.
+(the `uv`/`uvx` completion evals need those binaries during startup); the
+late one restores its precedence after `path_helper` demotes it.
+
+`mise activate` is the **last** line. Its precmd hook rebuilds PATH from the
+snapshot taken at activation, so anything prepended after it gets demoted
+behind `/bin` before the first prompt — with it near the top, `bash`
+resolved to macOS's 3.2 instead of nix's `bashInteractive` despite the nix
+prepend. Keep every PATH export above it.
 
 When an installer appends a PATH line to `~/.zshrc`, move it into the
 marked block — its position decides whether it can override brew/nix at all.
