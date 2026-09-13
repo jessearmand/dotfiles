@@ -1,0 +1,74 @@
+#!/bin/sh
+# Renders launchagents/com.jessearmand.package-audit.plist.template with this
+# checkout's absolute path and loads it into the user's launchd domain.
+# launchd needs absolute paths and does not expand ~ or $HOME, which is why
+# the plist is generated rather than symlinked like the other dotfiles.
+set -eu
+
+LABEL=com.jessearmand.package-audit
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+template="$repo_root/launchagents/$LABEL.plist.template"
+dest="$HOME/Library/LaunchAgents/$LABEL.plist"
+log_dir="$HOME/Library/Logs/package-audit"
+domain="gui/$(id -u)"
+
+usage() {
+  cat <<'USAGE'
+Usage: script/install-package-audit-agent [--install | --uninstall | --run | --status]
+
+  --install    (default) write ~/Library/LaunchAgents plist and (re)load it
+  --uninstall  unload the agent and remove the plist; logs are kept
+  --run        trigger an audit now (agent must be installed)
+  --status     show whether the agent is loaded and when it last ran
+USAGE
+}
+
+MODE=install
+case "${1:-}" in
+  '' | --install) MODE=install ;;
+  --uninstall) MODE=uninstall ;;
+  --run) MODE=run ;;
+  --status) MODE=status ;;
+  -h | --help) usage; exit 0 ;;
+  *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+esac
+
+loaded() {
+  launchctl print "$domain/$LABEL" >/dev/null 2>&1
+}
+
+case "$MODE" in
+  install)
+    mkdir -p "$(dirname "$dest")" "$log_dir"
+    sed -e "s|@REPO@|$repo_root|g" -e "s|@HOME@|$HOME|g" "$template" >"$dest"
+    plutil -lint "$dest" >/dev/null
+    if loaded; then
+      launchctl bootout "$domain/$LABEL"
+    fi
+    launchctl bootstrap "$domain" "$dest"
+    printf 'installed %s\n  script: %s/script/package-audit\n  log:    %s/package-audit.log\n' \
+      "$dest" "$repo_root" "$log_dir"
+    ;;
+  uninstall)
+    if loaded; then
+      launchctl bootout "$domain/$LABEL"
+    fi
+    rm -f "$dest"
+    printf 'removed %s (logs kept in %s)\n' "$dest" "$log_dir"
+    ;;
+  run)
+    loaded || { echo "agent is not loaded; run --install first" >&2; exit 1; }
+    launchctl kickstart "$domain/$LABEL"
+    printf 'started; follow with: tail -f %s/package-audit.log\n' "$log_dir"
+    ;;
+  status)
+    if loaded; then
+      launchctl print "$domain/$LABEL" | grep -E 'state|last exit code|run interval|program =' || true
+    else
+      echo "not loaded"
+    fi
+    if [ -f "$log_dir/package-audit.log" ]; then
+      printf 'last run: %s\n' "$(grep '^package-audit ' "$log_dir/package-audit.log" | tail -1)"
+    fi
+    ;;
+esac

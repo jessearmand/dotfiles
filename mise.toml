@@ -1,0 +1,43 @@
+# Repo-local mise tasks wrapping the scripts under script/. Run them from
+# inside the checkout (`mise run audit`) or from anywhere with
+# `mise -C ~/Develop/dotfiles run audit`. `mise tasks` lists them.
+
+[tasks."audit"]
+description = "Audit global cargo/pnpm/npm/bun/yarn/uv packages now"
+run = "script/package-audit"
+
+[tasks."audit:agent:install"]
+description = "Install or reload the weekly package-audit launch agent"
+run = "script/install-package-audit-agent --install"
+
+[tasks."audit:agent:run"]
+description = "Trigger the launch agent now and tail its log"
+run = "script/install-package-audit-agent --run"
+
+[tasks."audit:agent:status"]
+description = "Show whether the launch agent is loaded and its last run"
+run = "script/install-package-audit-agent --status"
+
+[tasks."audit:agent:uninstall"]
+description = "Unload and remove the package-audit launch agent (logs kept)"
+run = "script/install-package-audit-agent --uninstall"
+
+[tasks."audit:log"]
+description = "Show the summary of the last launch-agent audit run"
+run = """
+log="$HOME/Library/Logs/package-audit/package-audit.log"
+[ -f "$log" ] || { echo "no log yet at $log"; exit 1; }
+awk '/^package-audit /{buf=""} {buf=buf $0 "\\n"} END{printf "%s", buf}' "$log" | sed -n '/==== summary ====/,$p'
+"""
+
+[tasks."spotlight"]
+description = "Dry run: which cache dirs would be excluded from Spotlight (needs sudo)"
+run = "sudo script/spotlight-exclude-caches --dry-run"
+
+[tasks."spotlight:list"]
+description = "List Spotlight's current exclusion list (needs sudo)"
+run = "sudo script/spotlight-exclude-caches --list"
+
+[tasks."spotlight:apply"]
+description = "Exclude cache dirs from Spotlight and restart indexing (needs sudo)"
+run = "sudo script/spotlight-exclude-caches --apply"

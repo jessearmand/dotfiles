@@ -1,0 +1,154 @@
+#!/bin/sh
+# Adds well-known cache directories to Spotlight's per-volume exclusion list,
+# then turns indexing off and back on so mds picks the new list up.
+#
+# The exclusion list lives in the volume's VolumeConfiguration.plist (the same
+# list System Settings > Spotlight > Search Privacy edits). Apple ships no CLI
+# for that list, so this edits the plist with plutil. That needs root AND the
+# terminal app must have Full Disk Access: .Spotlight-V100 is TCC-protected,
+# and without FDA even root gets "Operation not permitted".
+#
+# Dot-directories (~/.cache, ~/.npm, ~/.cargo, ...) are never indexed by
+# Spotlight, so only visible cache locations are listed here.
+set -eu
+
+PLIST=/System/Volumes/Data/.Spotlight-V100/VolumeConfiguration.plist
+VOLUME=/
+
+usage() {
+  cat <<'USAGE'
+Usage: sudo script/spotlight-exclude-caches [--dry-run | --apply | --list] [EXTRA_DIR ...]
+
+  --dry-run  (default) show which cache directories exist and which of them
+             are not yet excluded. Needs root only to read the current list.
+  --apply    add the missing ones, then run `mdutil -i off` / `mdutil -i on`
+             on the volume so Spotlight reloads the exclusion list.
+  --list     print the current exclusion list and exit.
+
+Extra directories given on the command line are added to the built-in set.
+Only directories that exist are ever added; nothing is removed.
+USAGE
+}
+
+MODE=dry-run
+EXTRA=''
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) MODE=dry-run ;;
+    --apply) MODE=apply ;;
+    --list) MODE=list ;;
+    -h | --help) usage; exit 0 ;;
+    --*) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
+    *) EXTRA="$EXTRA
+$arg" ;;
+  esac
+done
+
+# Resolve the invoking user's home even under sudo.
+if [ -n "${SUDO_USER:-}" ]; then
+  home=$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory | awk '{print $2}')
+else
+  home=$HOME
+fi
+
+# Visible build/dependency caches that are large, churn constantly, and never
+# contain anything worth finding through Spotlight.
+cache_dirs() {
+  cat <<DIRS
+$home/Library/Caches
+$home/Library/Developer/Xcode/DerivedData
+$home/Library/Developer/CoreSimulator/Caches
+$home/Library/pnpm/store
+$home/Library/Application Support/Code/Cache
+$home/Library/Application Support/Code/CachedData
+$home/go/pkg/mod
+$EXTRA
+DIRS
+}
+
+require_root() {
+  if [ "$(id -u)" -ne 0 ]; then
+    echo "This needs root to read/write $PLIST; re-run with sudo." >&2
+    exit 1
+  fi
+  if ! ls "$(dirname "$PLIST")" >/dev/null 2>&1; then
+    cat >&2 <<MSG
+Cannot read $(dirname "$PLIST") even as root: the terminal app lacks
+Full Disk Access. Either
+  * System Settings > Privacy & Security > Full Disk Access: enable your
+    terminal (${TERM_PROGRAM:-Terminal}), restart it, and re-run; or
+  * use the supported UI instead: System Settings > Spotlight >
+    Search Privacy, and drag the directories printed by --dry-run there.
+MSG
+    exit 1
+  fi
+}
+
+current_exclusions() {
+  # One path per line; empty when the key is absent.
+  plutil -extract Exclusions json -o - "$PLIST" 2>/dev/null \
+    | sed -e 's/^\[//' -e 's/\]$//' -e 's/","/"\n"/g' -e 's/^"//' -e 's/"$//' \
+    | sed '/^$/d' || true
+}
+
+is_excluded() {
+  printf '%s\n' "$existing" | grep -Fxq "$1"
+}
+
+if [ "$(id -u)" -ne 0 ] || ! ls "$(dirname "$PLIST")" >/dev/null 2>&1; then
+  # Not able to read the list: still print the candidate directories so they
+  # can be added by hand, then explain what is missing.
+  cache_dirs | sed '/^$/d' | while IFS= read -r dir; do
+    [ -d "$dir" ] && printf 'candidate %s\n' "$dir"
+  done
+  printf '\n'
+fi
+require_root
+existing=$(current_exclusions)
+
+if [ "$MODE" = list ]; then
+  printf '%s\n' "$existing"
+  exit 0
+fi
+
+# Classify every candidate once: "absent" (not on disk), "excluded" (already
+# in the list) or "ADD" (present and not yet excluded).
+plan=$(cache_dirs | sed '/^$/d' | while IFS= read -r dir; do
+  if [ ! -d "$dir" ]; then
+    printf 'absent    %s\n' "$dir"
+  elif is_excluded "$dir"; then
+    printf 'excluded  %s\n' "$dir"
+  else
+    printf 'ADD       %s\n' "$dir"
+  fi
+done)
+printf '%s\n' "$plan"
+
+to_add=$(printf '%s\n' "$plan" | sed -n 's/^ADD  *//p')
+n_add=$(printf '%s\n' "$plan" | grep -c '^ADD ' || true)
+n_absent=$(printf '%s\n' "$plan" | grep -c '^absent ' || true)
+n_present=$(printf '%s\n' "$existing" | sed '/^$/d' | wc -l | tr -d ' ')
+
+printf '\n%s already excluded on the volume, %s to add, %s not present on disk.\n' \
+  "$n_present" "$n_add" "$n_absent"
+
+if [ "$MODE" = dry-run ]; then
+  printf 'Dry run: re-run with --apply to write them.\n'
+  exit 0
+fi
+
+if [ "$n_add" -eq 0 ]; then
+  printf 'Nothing to add.\n'
+  exit 0
+fi
+
+cp "$PLIST" "$PLIST.bak.$(date +%Y%m%d%H%M%S)"
+mdutil -i off "$VOLUME" >/dev/null
+if ! plutil -extract Exclusions raw -o /dev/null "$PLIST" >/dev/null 2>&1; then
+  plutil -insert Exclusions -array "$PLIST"
+fi
+printf '%s\n' "$to_add" | sed '/^$/d' | while IFS= read -r dir; do
+  plutil -insert Exclusions -string "$dir" -append "$PLIST"
+done
+mdutil -i on "$VOLUME" >/dev/null
+printf 'Added %s path(s); indexing re-enabled on %s.\n' "$n_add" "$VOLUME"

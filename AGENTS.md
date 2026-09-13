@@ -24,6 +24,13 @@ Files under `config/` map to `~/.config/` with the same relative path:
 touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 ```
 
+**Spotlight and package audit** (mise tasks in `mise.toml`, wrapping `script/`):
+```bash
+mise run spotlight            # dry run of Spotlight cache exclusions; spotlight:list, spotlight:apply (all sudo)
+mise run audit                # audit global cargo/pnpm/npm/bun/yarn/uv packages now
+mise run audit:agent:install  # weekly launchd agent; also audit:agent:run/status/uninstall, audit:log
+```
+
 ## Managed Files
 
 | File | Purpose |
@@ -41,6 +48,7 @@ touch ~/.gitconfig.private && chmod 600 ~/.gitconfig.private
 | `bunfig.toml` | bun: skip versions published in the last 7 days |
 | `config/pnpm/config.yaml` | pnpm: skip versions published in the last 7 days |
 | `config/uv/uv.toml` | uv: skip versions published in the last 7 days |
+| `launchagents/com.jessearmand.package-audit.plist.template` | launchd template for the weekly package audit; rendered by `script/install-package-audit-agent` |
 
 ## Key Tools & Dependencies
 

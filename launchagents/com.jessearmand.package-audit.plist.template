@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jessearmand.package-audit</string>
+
+  <!-- The script is the program itself (not `/bin/sh script`), so System
+       Settings > Login Items & Extensions lists it as "package-audit"
+       rather than as an anonymous "sh". -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>@REPO@/script/package-audit</string>
+    <string>--notify</string>
+  </array>
+
+  <!-- Weekly, Monday 10:00 local time. launchd runs a missed slot at the
+       next wake, so a closed laptop still gets audited. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>10</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <key>StandardOutPath</key>
+  <string>@HOME@/Library/Logs/package-audit/package-audit.log</string>
+  <key>StandardErrorPath</key>
+  <string>@HOME@/Library/Logs/package-audit/package-audit.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>

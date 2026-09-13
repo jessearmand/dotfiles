@@ -112,6 +112,59 @@ differing files are skipped rather than replaced.
 
 Replaced files are moved aside as `<dest>.bak.<timestamp>` — nothing is deleted.
 
+Scripts
+-------
+
+`script/spotlight-exclude-caches` adds visible cache directories
+(`~/Library/Caches`, `~/Library/pnpm/store`, `~/go/pkg/mod`, Xcode
+DerivedData, ...) to Spotlight's per-volume exclusion list, then turns
+indexing off and back on so `mds` reloads it. Dot-directories such as
+`~/.cache` or `~/.npm` are never indexed, so they are not listed.
+
+Apple ships no CLI for that list; it is the `Exclusions` array in the
+volume's `VolumeConfiguration.plist`, the same list System Settings >
+Spotlight > Search Privacy edits. `.Spotlight-V100` is TCC-protected, so the
+script needs root **and** the terminal app must have Full Disk Access
+(System Settings > Privacy & Security > Full Disk Access). Without it even
+root gets "Operation not permitted", and the supported route is to drag the
+directories the dry run prints into Search Privacy by hand.
+
+    sudo script/spotlight-exclude-caches            # dry run: what would be added
+    sudo script/spotlight-exclude-caches --apply    # add them and restart indexing
+    sudo script/spotlight-exclude-caches --list     # show the current list
+
+Only directories that exist are added, nothing is removed, and the plist is
+backed up next to itself first. Extra paths can be passed as arguments.
+
+`script/package-audit` audits every globally installed package across cargo,
+pnpm, npm, bun, yarn and uv, using each manager's own auditor (`cargo audit
+bin`, `pnpm audit`, `npm audit`, `bun audit`, `yarn audit`, `pip-audit`). A
+manager that is not installed, or has no global packages, is reported as such
+rather than treated as a failure. Exit status is 0 when clean, 1 when
+vulnerabilities were found, 2 when an auditor could not run.
+
+    script/package-audit                 # everything
+    script/package-audit --only cargo,uv # a subset
+    script/package-audit --notify        # plus a macOS notification
+
+`mise.toml` wraps all of this as tasks, so from the checkout (or with
+`mise -C ~/Develop/dotfiles`) `mise tasks` lists them and:
+
+    mise run audit                    # audit now (extra args pass through: -- --only uv)
+    mise run audit:agent:install      # also :run, :status, :uninstall
+    mise run audit:log                # summary of the last scheduled run
+    mise run spotlight                # dry run; also spotlight:list, spotlight:apply
+
+`script/install-package-audit-agent` schedules it weekly (Monday 10:00) as a
+launchd user agent, logging to `~/Library/Logs/package-audit/`. The plist is
+rendered from `launchagents/*.plist.template` with this checkout's absolute
+path, since launchd does not expand `~`:
+
+    script/install-package-audit-agent            # install / reload
+    script/install-package-audit-agent --run      # audit now
+    script/install-package-audit-agent --status
+    script/install-package-audit-agent --uninstall
+
 Deprecated
 ----------
 

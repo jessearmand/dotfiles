@@ -1,0 +1,312 @@
+#!/bin/sh
+# Audits globally installed packages for every package manager on this
+# machine: cargo, pnpm, npm, bun, yarn, uv. A manager that is not installed,
+# or has no global packages, is reported as such rather than treated as an
+# error. Designed to run unattended from launchd (see
+# script/install-package-audit-agent) as well as by hand.
+#
+# Exit status: 0 everything clean, 1 vulnerabilities found, 2 an auditor
+# failed to run (missing tool, network error, ...).
+set -u
+
+# launchd starts agents with a bare PATH; make the user-level tool locations
+# visible regardless of how we were started.
+case "$(uname -s)" in
+  Darwin) PNPM_HOME="${PNPM_HOME:-$HOME/Library/pnpm}" ;;
+  *) PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}" ;;
+esac
+export PNPM_HOME
+# pnpm refuses every global command unless its bin dir is on PATH.
+PATH="$HOME/.local/share/mise/shims:$HOME/.cargo/bin:$HOME/.local/bin:$HOME/.bun/bin:$PNPM_HOME/bin:$HOME/.nix-profile/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+usage() {
+  cat <<'USAGE'
+Usage: script/package-audit [--notify] [--only MANAGER,...]
+
+  --notify        post a macOS notification with the summary when done
+  --only LIST     audit only these managers (comma-separated subset of
+                  cargo,pnpm,npm,bun,yarn,uv)
+USAGE
+}
+
+NOTIFY=0
+ONLY='cargo,pnpm,npm,bun,yarn,uv'
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --notify) NOTIFY=1 ;;
+    --only) shift; ONLY=${1:?--only needs a value} ;;
+    -h | --help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+  esac
+  shift
+done
+
+workdir=$(mktemp -d "${TMPDIR:-/tmp}/package-audit.XXXXXX")
+trap 'rm -rf "$workdir"' EXIT INT TERM
+
+# Per-manager outcome codes, collected into the summary.
+OK=0; VULN=1; FAIL=2; NOT_INSTALLED=3; NO_GLOBALS=4
+summary=''
+
+section() {
+  printf '\n==== %s ====\n' "$1"
+}
+
+record() {
+  # record MANAGER CODE DETAIL
+  summary="$summary
+$1|$2|$3"
+}
+
+has() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+# Runs an auditor, streaming its output, and maps its exit status onto our
+# codes: 0 -> OK, anything else -> VULN (native auditors exit non-zero on
+# findings; a tool crash is indistinguishable, which is why the output is kept).
+run_audit() {
+  if "$@"; then
+    return "$OK"
+  else
+    return "$VULN"
+  fi
+}
+
+# --- npm --------------------------------------------------------------------
+# npm has no lockfile for the global prefix, so `npm audit` cannot run there
+# directly. Rebuild the global dependency set as a throwaway project, resolve
+# a lockfile for it, and audit that. Packages that were installed from a
+# local tarball or a private registry cannot be resolved (E404) and are
+# dropped from the set, with a note, so the rest still gets audited.
+npm_resolve_lockfile() {
+  proj=$1
+  attempts=0
+  while [ "$attempts" -lt 10 ]; do
+    attempts=$((attempts + 1))
+    # npm 12 defaults allow-remote=none and treats a dependency on `npm`
+    # itself as a remote tarball; nothing is installed here, only resolved.
+    if out=$(npm install --prefix "$proj" --package-lock-only --ignore-scripts \
+      --no-audit --no-fund --allow-remote=all 2>&1); then
+      return 0
+    fi
+    missing=$(printf '%s\n' "$out" | sed -n "s/.*resource '\(.*\)@[^@']*' could not be found.*/\1/p" | head -1)
+    [ -n "$missing" ] || { printf '%s\n' "$out"; return 1; }
+    printf 'skipping %s: not on the registry\n' "$missing"
+    jq --arg n "$missing" 'del(.dependencies[$n])' "$proj/package.json" >"$proj/package.json.new" \
+      && mv "$proj/package.json.new" "$proj/package.json"
+  done
+  return 1
+}
+
+audit_npm() {
+  has npm || { record npm "$NOT_INSTALLED" ''; return; }
+  deps=$(npm ls -g --depth=0 --json 2>/dev/null \
+    | jq -c '(.dependencies // {}) | with_entries(.value = .value.version)')
+  names=$(printf '%s' "$deps" | jq -r 'keys | join(" ")')
+  if [ -z "$names" ]; then
+    printf 'no global packages installed\n'
+    record npm "$NO_GLOBALS" ''
+    return
+  fi
+  printf 'global packages: %s\n' "$names"
+  proj="$workdir/npm"
+  mkdir -p "$proj"
+  printf '%s' "$deps" \
+    | jq '{name: "global-audit", private: true, dependencies: .}' >"$proj/package.json"
+  if ! npm_resolve_lockfile "$proj"; then
+    printf 'could not resolve a lockfile for the global set\n'
+    record npm "$FAIL" 'lockfile resolution failed'
+    return
+  fi
+  audited=$(jq -r '.dependencies | keys | join(" ")' "$proj/package.json")
+  run_audit npm audit --prefix "$proj"
+  record npm "$?" "$audited"
+}
+
+# --- pnpm -------------------------------------------------------------------
+# pnpm keeps each `pnpm add -g` target as its own project (with a lockfile)
+# under the global root, so audit every project that has one. The root is a
+# workspace, so --ignore-workspace makes pnpm read the project's own lockfile
+# instead of looking for one at the workspace root.
+audit_pnpm() {
+  has pnpm || { record pnpm "$NOT_INSTALLED" ''; return; }
+  root=$(pnpm root -g 2>/dev/null) || root=''
+  names=''
+  worst=$OK
+  for proj in "$root"/*/; do
+    [ -f "$proj/pnpm-lock.yaml" ] || continue
+    here=$(jq -r '(.dependencies // {}) | keys | join(" ")' "$proj/package.json" 2>/dev/null)
+    [ -n "$here" ] || continue
+    # pnpm leaves the previous project behind after a global upgrade; audit
+    # each package set once.
+    case " $names " in *" $here "*) continue ;; esac
+    names="$names $here"
+    printf -- '-- %s\n' "$here"
+    run_audit pnpm audit --dir "$proj" --ignore-workspace
+    code=$?
+    [ "$code" -gt "$worst" ] && worst=$code
+  done
+  if [ -z "$names" ]; then
+    printf 'no global packages installed\n'
+    record pnpm "$NO_GLOBALS" ''
+    return
+  fi
+  record pnpm "$worst" "${names# }"
+}
+
+# --- bun --------------------------------------------------------------------
+audit_bun() {
+  has bun || { record bun "$NOT_INSTALLED" ''; return; }
+  gdir="${BUN_INSTALL:-$HOME/.bun}/install/global"
+  names=$(jq -r '(.dependencies // {}) | keys | join(" ")' "$gdir/package.json" 2>/dev/null)
+  if [ -z "$names" ]; then
+    printf 'no global packages installed\n'
+    record bun "$NO_GLOBALS" ''
+    return
+  fi
+  printf 'global packages: %s\n' "$names"
+  (cd "$gdir" && run_audit bun audit)
+  record bun "$?" "$names"
+}
+
+# --- yarn -------------------------------------------------------------------
+# Only Yarn classic has global installs; Berry dropped them, so there is
+# nothing to audit there by construction.
+audit_yarn() {
+  has yarn || { record yarn "$NOT_INSTALLED" ''; return; }
+  case "$(yarn --version 2>/dev/null)" in
+    1.*) ;;
+    *)
+      printf 'yarn berry has no global installs\n'
+      record yarn "$NO_GLOBALS" ''
+      return
+      ;;
+  esac
+  gdir=$(yarn global dir 2>/dev/null)
+  names=$(jq -r '(.dependencies // {}) | keys | join(" ")' "$gdir/package.json" 2>/dev/null)
+  if [ -z "$names" ]; then
+    printf 'no global packages installed\n'
+    record yarn "$NO_GLOBALS" ''
+    return
+  fi
+  printf 'global packages: %s\n' "$names"
+  run_audit yarn audit --cwd "$gdir"
+  record yarn "$?" "$names"
+}
+
+# --- cargo ------------------------------------------------------------------
+# `cargo install` leaves no shared lockfile; cargo-audit can instead inspect
+# the installed binaries themselves (exact for cargo-auditable builds, a
+# best-effort dependency scan otherwise).
+audit_cargo() {
+  has cargo || { record cargo "$NOT_INSTALLED" ''; return; }
+  crates="${CARGO_HOME:-$HOME/.cargo}/.crates2.json"
+  bins=$([ -f "$crates" ] && jq -r '.installs | to_entries[] | .value.bins[]' "$crates") || bins=''
+  names=$([ -f "$crates" ] && jq -r '.installs | keys[] | split(" ")[0]' "$crates" | tr '\n' ' ') || names=''
+  if [ -z "$bins" ]; then
+    printf 'no global packages installed\n'
+    record cargo "$NO_GLOBALS" ''
+    return
+  fi
+  printf 'global packages: %s\n' "${names% }"
+  if ! has cargo-audit; then
+    printf 'cargo-audit is not installed (cargo install cargo-audit)\n'
+    record cargo "$FAIL" 'cargo-audit missing'
+    return
+  fi
+  paths=$(printf '%s\n' "$bins" | sed "s|^|${CARGO_HOME:-$HOME/.cargo}/bin/|" | tr '\n' ' ')
+  # shellcheck disable=SC2086 # paths are intentionally word-split
+  run_audit cargo audit bin $paths
+  record cargo "$?" "${names% }"
+}
+
+# --- uv ---------------------------------------------------------------------
+# Each `uv tool install` gets its own venv; freeze it to pinned requirements
+# and hand those to pip-audit. --disable-pip keeps pip-audit from building a
+# scratch venv (which needs ensurepip, absent from uv-managed Pythons). `uvx` is preferred over a bare pip-audit so a
+# broken system-level install cannot mask findings.
+# shellcheck disable=SC2329 # invoked through run_audit
+pip_audit() {
+  if has uvx; then
+    uvx pip-audit "$@"
+  else
+    pip-audit "$@"
+  fi
+}
+
+audit_uv() {
+  has uv || { record uv "$NOT_INSTALLED" ''; return; }
+  tooldir=$(uv tool dir 2>/dev/null)
+  names=$(uv tool list 2>/dev/null | sed -n 's/^\([^- ][^ ]*\) v.*/\1/p' | tr '\n' ' ')
+  if [ -z "$names" ]; then
+    printf 'no global packages installed\n'
+    record uv "$NO_GLOBALS" ''
+    return
+  fi
+  printf 'global packages: %s\n' "${names% }"
+  if ! has uvx && ! has pip-audit; then
+    printf 'pip-audit is not installed (uv tool install pip-audit)\n'
+    record uv "$FAIL" 'pip-audit missing'
+    return
+  fi
+  worst=$OK
+  for name in $names; do
+    py="$tooldir/$name/bin/python"
+    [ -x "$py" ] || continue
+    req="$workdir/uv-$name.txt"
+    uv pip freeze --python "$py" >"$req" 2>/dev/null || continue
+    printf -- '-- %s\n' "$name"
+    run_audit pip_audit --requirement "$req" --no-deps --disable-pip --progress-spinner off
+    code=$?
+    [ "$code" -gt "$worst" ] && worst=$code
+  done
+  record uv "$worst" "${names% }"
+}
+
+# --- driver -----------------------------------------------------------------
+printf 'package-audit %s on %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(hostname -s)"
+for m in $(printf '%s' "$ONLY" | tr ',' ' '); do
+  section "$m"
+  case "$m" in
+    npm) audit_npm ;;
+    pnpm) audit_pnpm ;;
+    bun) audit_bun ;;
+    yarn) audit_yarn ;;
+    cargo) audit_cargo ;;
+    uv) audit_uv ;;
+    *) printf 'unknown manager %s\n' "$m" ;;
+  esac
+done
+
+section summary
+exit_code=0
+n_vuln=0
+n_fail=0
+printf '%s\n' "$summary" | sed '/^$/d' | while IFS='|' read -r mgr code detail; do
+  case "$code" in
+    "$OK") printf '%-6s clean          %s\n' "$mgr" "$detail" ;;
+    "$VULN") printf '%-6s VULNERABLE     %s\n' "$mgr" "$detail" ;;
+    "$FAIL") printf '%-6s audit failed   %s\n' "$mgr" "$detail" ;;
+    "$NOT_INSTALLED") printf '%-6s not installed\n' "$mgr" ;;
+    "$NO_GLOBALS") printf '%-6s no global packages installed\n' "$mgr" ;;
+  esac
+done
+n_vuln=$(printf '%s\n' "$summary" | grep -c "|$VULN|" || true)
+n_fail=$(printf '%s\n' "$summary" | grep -c "|$FAIL|" || true)
+[ "$n_fail" -gt 0 ] && exit_code=2
+[ "$n_vuln" -gt 0 ] && exit_code=1
+
+if [ "$NOTIFY" -eq 1 ] && has osascript; then
+  vuln_list=$(printf '%s\n' "$summary" | awk -F'|' -v v="$VULN" '$2 == v {print $1}' | tr '\n' ' ')
+  fail_list=$(printf '%s\n' "$summary" | awk -F'|' -v f="$FAIL" '$2 == f {print $1}' | tr '\n' ' ')
+  case "$exit_code" in
+    0) msg='All global packages are clean.' ;;
+    1) msg="Vulnerabilities in: ${vuln_list% }" ;;
+    *) msg="Audit failed for: ${fail_list% }" ;;
+  esac
+  osascript -e "display notification \"$msg\" with title \"Package audit\"" >/dev/null 2>&1 || true
+fi
+
+exit "$exit_code"
