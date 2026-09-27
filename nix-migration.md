@@ -66,14 +66,21 @@ Brew's installer drops `/etc/paths.d/homebrew`, so this front-loads
 `/opt/homebrew/bin` on every shell startup, defeating any earlier `export
 PATH="$HOME/.nix-profile/bin:$PATH"`.
 
-Fix: re-prepend nix paths *after* `brew shellenv`. In `~/.zshrc`:
+Fix: make PATH order independent of what ran before it. `zshrc` declares
+`typeset -U path`, runs `brew shellenv`, and only then assigns one ordered
+list (phase 4 of `zshrc`). With `-U`, the assignment moves every listed
+directory to its listed position:
 
 ```sh
-eval "$(/opt/homebrew/bin/brew shellenv)"
-
-# `brew shellenv` runs path_helper which front-loads /opt/homebrew/bin.
-# Re-prepend nix paths so nix profile beats homebrew on overlap (e.g. git, ffmpeg).
-export PATH="$HOME/.nix-profile/bin:/nix/var/nix/profiles/default/bin:$PATH"
+typeset -gU path
+path=(
+  ...
+  "$HOME/.nix-profile/bin"          # nix beats homebrew on overlap (git, ffmpeg)
+  /nix/var/nix/profiles/default/bin
+  /opt/homebrew/bin /opt/homebrew/sbin
+  ...
+  $path                             # whatever path_helper and the login shell set
+)
 ```
 
 Without this, you'll install nix versions of tools and silently keep using

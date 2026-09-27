@@ -63,34 +63,45 @@ Example contents:
       email = you@example.com
       signingkey = YOUR_KEY_ID
 
-PATH ordering in zshrc
-----------------------
+zshrc load order
+----------------
 
-`zshrc` has two PATH zones, split by `eval "$(brew shellenv)"`:
+`zshrc` runs in numbered phases, and each phase depends only on the phases
+above it. The header of the file lists them: instant prompt, helpers,
+environment, PATH, zinit, completion, Turbo, mise.
 
-- `brew shellenv` runs macOS `path_helper`, which **rebuilds** PATH: it
-  front-loads `/etc/paths` + `/etc/paths.d/*` (including
-  `/opt/homebrew/bin`), then re-appends previously-set entries behind them.
-  Every prepend *before* that line (mint, bun, grok, go, gcloud, cargo)
-  therefore ends up **below** homebrew — harmless for uniquely-named
-  binaries, but useless for overriding anything.
-- Entries that must outrank homebrew live in the marked block *after*
-  `brew shellenv`, where later prepends win. Final precedence:
+**PATH** is one ordered list in phase 4, highest precedence first. `path` is
+declared unique (`typeset -U`), so assigning the list moves each directory to
+the position where it is listed and drops the later duplicates. The result
+is the same in a fresh login shell and in a nested shell that inherits PATH.
+The path_helper runs from `/etc/zprofile` and from `brew shellenv` cannot
+reorder it, because both run before the list. Final precedence:
 
-      mise tools > ~/.local/bin > pnpm > deno > nix profile > homebrew > system
+    mise tools > zinit programs (fzf) > opencode/kimi/bend > ~/.local/bin
+      > pnpm > deno > nix profile > homebrew > gcloud/go/grok/bun/mint
+      > login PATH (system, zshenv, ~/.zprofile) > lm-studio
 
-`~/.local/bin` appears twice on purpose: the early prepend is load-bearing
-(the `uv`/`uvx` completion evals need those binaries during startup); the
-late one restores its precedence after `path_helper` demotes it.
+When an installer appends a PATH line to `~/.zshrc`, move the directory into
+the list. Its position in the list sets its precedence.
 
 `mise activate` is the **last** line. Its precmd hook rebuilds PATH from the
 snapshot taken at activation, so anything prepended after it gets demoted
-behind `/bin` before the first prompt — with it near the top, `bash`
+behind `/bin` before the first prompt. With mise near the top, `bash`
 resolved to macOS's 3.2 instead of nix's `bashInteractive` despite the nix
-prepend. Keep every PATH export above it.
+prepend.
 
-When an installer appends a PATH line to `~/.zshrc`, move it into the
-marked block — its position decides whether it can override brew/nix at all.
+**compinit** runs synchronously in phase 6, before mise. It trusts the dump
+(`compinit -C`) for 24 hours after each full check. To pick up a newly
+installed completion at once, run `rm ~/.zcompdump`. mise's hook runs its
+own `compinit -i` when `compdef` is missing, and it registers tool
+completions (for example fnox). A compinit deferred to Turbo would run a
+second time and reset those registrations.
+
+**Generated scripts are cached** in `~/.cache/zsh`: `brew shellenv`,
+`fzf --zsh`, and the `uv`/`uvx` completions. Each cache file is regenerated
+when the binary or script that produces it changes. The resolved path is
+compared too, for Nix store paths, whose mtime never changes. To force a
+rebuild, delete `~/.cache/zsh`.
 
 Linking (optional)
 -----------------
