@@ -193,12 +193,9 @@ compdef _gnu_generic zed
 ### 7. Turbo: loaded right after the first prompt ##############################
 # Listed order is load order. fast-syntax-highlighting loads last because it
 # wraps every ZLE widget that exists when it loads (fzf's included).
-# blockf: git-ignore's completion is already linked into zinit's completions
-# dir, so its fpath entry is not needed.
 zinit wait lucid light-mode for \
     alexiszamanidis/zsh-git-fzf \
   blockf \
-    laggardkernel/git-ignore \
     zdharma-continuum/fast-syntax-highlighting
 
 ### 8. mise: must stay last ###################################################
@@ -206,3 +203,6 @@ zinit wait lucid light-mode for \
 # demotes every prepend after this line (e.g. nix bash below /bin/bash).
 # Invoked by absolute path so it doesn't rely on PATH.
 eval "$(~/.local/bin/mise activate zsh)"
+
+# Added by the cua installer
+export PATH="/Users/jessearmand/.local/bin:$PATH"
