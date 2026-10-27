@@ -1,0 +1,6 @@
+We can rebuild the completion once a day, that's good enough for most daily usage
+
+I've run zinit self-update, but there's no output other than everything is up-to-date, review that this is truly the case
+I've deleted zsh-users/zsh-syntax-highlighting lincheney/fzf-tab-completion
+
+What are these four annexes? Also let's remove the gi alias, I can use git-ignore directly
