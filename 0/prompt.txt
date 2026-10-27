@@ -1,0 +1,9 @@
+I've created a branch, reset main to origin, create a PR from feat/entire-cli
+
+---
+
+Resolve the review comments by codex
+
+---
+
+I've made the edit, and then we can commit, also there few other unrelated changes, that can be separate commit
