@@ -77,3 +77,8 @@ git lola   # Oneline graph log (all branches)
 - `~/.config/**` (app-specific configs including mise, LazyVim)
 - `~/.claude*`, `~/.codex*` (coding agents)
 - Archived configs in `deprecated/`
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
