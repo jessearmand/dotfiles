@@ -1,0 +1,6 @@
+Based on the @zshrc configuration, what can be improved on the zinit setup that doesn't sacrifice the functionality, but would improve overall performance, and organization, also to provide easier understanding on the ordering of loading, path setting, zsh completion, instant prompt, etc.
+
+Reference:
+https://zdharma-continuum.github.io/zinit/wiki/INTRODUCTION/
+https://zdharma-continuum.github.io/zinit/wiki/Code-Documentation/
+https://zdharma-continuum.github.io/zinit/wiki/zsh-plugin-standard/
