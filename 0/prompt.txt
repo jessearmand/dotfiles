@@ -1,0 +1,5 @@
+Review the modified files, where should I add the new completion setup for entire CLI
+
+---
+
+Commit the changes
