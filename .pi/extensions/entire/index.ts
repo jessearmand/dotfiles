@@ -22,7 +22,7 @@ export default function (pi: ExtensionAPI) {
   const nested = Boolean(process.env.ENTIRE_PI_NESTED);
   process.env.ENTIRE_PI_NESTED = "1";
 
-  const ENTIRE_CMD = 'entire';
+  const ENTIRE_CMD = "entire";
   let pendingSkillEvents: Array<{ skill_name: string; invocation: string; timestamp: string }> = [];
 
   // fireHook pipes data to `entire hooks pi <hookName>` and resolves with the
@@ -37,6 +37,9 @@ export default function (pi: ExtensionAPI) {
           { timeout: 10000, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
           (_err, stdout) => resolve(typeof stdout === "string" ? stdout : ""),
         );
+        // EPIPE arrives asynchronously when `entire` is missing or exits before
+        // reading stdin; without a listener it is thrown and kills Pi.
+        child.stdin?.on("error", () => {});
         child.stdin?.end(JSON.stringify(data));
       } catch {
         // best effort — never block the agent on a hook failure
