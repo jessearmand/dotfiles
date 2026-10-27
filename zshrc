@@ -157,6 +157,7 @@ fpath=(
 # regenerated when the binary changes.
 .zshrc-cache "$ZSHRC_CACHE/completions/_uv" "${commands[uv]}" uv generate-shell-completion zsh
 .zshrc-cache "$ZSHRC_CACHE/completions/_uvx" "${commands[uvx]}" uvx --generate-shell-completion zsh
+.zshrc-cache "$ZSHRC_CACHE/completions/_entire" "${commands[entire]}" entire completion zsh
 
 # compinit trusts the dump for a day. For 24 hours after a full check it runs
 # with -C: no compaudit and no rescan of fpath. After that, one shell runs
